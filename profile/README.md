@@ -37,31 +37,31 @@ All CLIs are distributed through the same channels:
 
 # Software
 
-## `cfl` - Confluence CLI
+## [`cfl`](https://github.com/open-cli-collective/confluence-cli) - Confluence CLI
 
 A command-line interface for Atlassian Confluence Cloud. Manage pages from the terminal with markdown-first authoring—write and view pages in markdown, auto-converted to/from Confluence format. Search with CQL, manage attachments, and open pages in browser.
 
-## `jtk` - Jira Ticket CLI
+## [`jtk`](https://github.com/open-cli-collective/jira-ticket-cli) - Jira Ticket CLI
 
 A command-line interface for managing Jira Cloud tickets. List, create, update, and search issues. Manage sprints and boards, add comments, perform transitions.
 
-## `slck` - Slack CLI
+## [`slck`](https://github.com/open-cli-collective/slack-chat-api) - Slack CLI
 
 A lightweight CLI for the Slack Web API. Send messages, manage channels, search—designed for automation, CI/CD pipelines, and scripting. Not the official Slack CLI (that's for building Slack apps).
 
-## `nrq` - New Relic CLI
+## [`nrq`](https://github.com/open-cli-collective/newrelic-cli) - New Relic CLI
 
 A CLI for New Relic APIs. APM applications, alert policies, dashboards, deployments, entities, log parsing rules, NerdGraph queries, NRQL, synthetic monitors, and user management.
 
-## `gro` - Google Workspace Read-Only CLI
+## [`gro`](https://github.com/open-cli-collective/google-readonly) - Google Workspace Read-Only CLI
 
 A read-only CLI for Google services. Gmail, Calendar, Contacts, and Drive access using only readonly OAuth scopes. Search, view, and download without any write capabilities.
 
-## `cpm` - Claude Plugin Manager
+## [`cpm`](https://github.com/open-cli-collective/cpm) - Claude Plugin Manager
 
 A terminal UI for managing Claude Code plugins. Two-pane TUI with clear scope indicators (global/project/local), batch operations, search, and keyboard/mouse support.
 
-## `kitty-themes`
+## [`kitty-themes`](https://github.com/open-cli-collective/kitty-themes)
 
 Theme collection for the kitty terminal emulator. Installable via Homebrew.
 
