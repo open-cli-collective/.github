@@ -2,8 +2,9 @@
 
 ## Table of Contents
 
-- [What's the Point?](#whats-the-point)
-- [Who We Are](#who-we-are)
+- [Meta](#meta)
+  - [What's the Point?](#whats-the-point)
+  - [Who We Are](#who-we-are)
 - [Where to Find It](#where-to-find-it)
 - [Software](#software)
   - [`cfl` - Confluence CLI](#cfl---confluence-cli)
@@ -15,6 +16,8 @@
   - [`kitty-themes`](#kitty-themes)
 - [Conventions](#conventions)
   - [Builds](#builds)
+
+# Meta
 
 ## What's the Point?
 
