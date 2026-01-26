@@ -4,6 +4,7 @@
 
 - [What's the Point?](#whats-the-point)
 - [Who We Are](#who-we-are)
+- [Where to Find It](#where-to-find-it)
 - [Software](#software)
   - [`cfl` - Confluence CLI](#cfl---confluence-cli)
   - [`jtk` - Jira Ticket CLI](#jtk---jira-ticket-cli)
@@ -14,7 +15,6 @@
   - [`kitty-themes`](#kitty-themes)
 - [Conventions](#conventions)
   - [Builds](#builds)
-  - [Where to Find It](#where-to-find-it)
 
 ## What's the Point?
 
@@ -23,6 +23,17 @@ An open source collective focused on CLI utilities, largely for LLM orchestratio
 ## Who We Are
 
 Anyone can join if they contribute well. That's it.
+
+# Where to Find It
+
+All CLIs are distributed through the same channels:
+
+| Platform | Method |
+|----------|--------|
+| **macOS** | Homebrew via `open-cli-collective/tap` |
+| **Windows** | Chocolatey, Winget |
+| **Linux** | APT (Debian/Ubuntu), DNF/YUM (Fedora/RHEL), Snap, Homebrew |
+| **All** | Binary downloads from GitHub Releases, `go install` |
 
 # Software
 
@@ -72,14 +83,3 @@ make build   # Build binary
 make test    # Run tests
 make lint    # Run linter
 ```
-
-## Where to Find It
-
-All CLIs are distributed through the same channels:
-
-| Platform | Method |
-|----------|--------|
-| **macOS** | Homebrew via `open-cli-collective/tap` |
-| **Windows** | Chocolatey, Winget |
-| **Linux** | APT (Debian/Ubuntu), DNF/YUM (Fedora/RHEL), Snap, Homebrew |
-| **All** | Binary downloads from GitHub Releases, `go install` |
