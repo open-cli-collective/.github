@@ -9,6 +9,8 @@
 - [Software](#software)
   - [`cfl` - Confluence CLI](#cfl---confluence-cli)
   - [`jtk` - Jira Ticket CLI](#jtk---jira-ticket-cli)
+  - [`hspt` - HubSpot CLI](#hspt---hubspot-cli)
+  - [`sfdc` - Salesforce CLI](#sfdc---salesforce-cli)
   - [`slck` - Slack CLI](#slck---slack-cli)
   - [`nrq` - New Relic CLI](#nrq---new-relic-cli)
   - [`gro` - Google Workspace Read-Only CLI](#gro---google-workspace-read-only-cli)
@@ -40,13 +42,21 @@ All CLIs are distributed through the same channels:
 
 # Software
 
-## [`cfl`](https://github.com/open-cli-collective/confluence-cli) - Confluence CLI
+## [`cfl`](https://github.com/open-cli-collective/atlassian-cli) - Confluence CLI
 
 A command-line interface for Atlassian Confluence Cloud. Manage pages from the terminal with markdown-first authoring—write and view pages in markdown, auto-converted to/from Confluence format. Search with CQL, manage attachments, and open pages in browser.
 
-## [`jtk`](https://github.com/open-cli-collective/jira-ticket-cli) - Jira Ticket CLI
+## [`jtk`](https://github.com/open-cli-collective/atlassian-cli) - Jira Ticket CLI
 
 A command-line interface for managing Jira Cloud tickets. List, create, update, and search issues. Manage sprints and boards, add comments, perform transitions.
+
+## [`hspt`](https://github.com/open-cli-collective/hubspot-cli) - HubSpot CLI
+
+A command-line interface for HubSpot CRM. Manage contacts, companies, deals, tickets, and engagements. Access marketing features like forms and campaigns, CMS content, and workflows. Includes GraphQL support for advanced queries.
+
+## [`sfdc`](https://github.com/open-cli-collective/salesforce-cli) - Salesforce CLI
+
+A command-line interface for Salesforce. Query data with SOQL, search across objects, manage records, and check org limits. OAuth authentication with secure token storage.
 
 ## [`slck`](https://github.com/open-cli-collective/slack-chat-api) - Slack CLI
 
