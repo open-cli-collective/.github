@@ -179,6 +179,9 @@ jobs:
           set -euo pipefail
           if gh release view "$FINAL_TAG" >/dev/null 2>&1; then
             echo "::notice::final release $FINAL_TAG already exists (rerun) — replacing it"
+            # If the rename below fails after this delete, this run's artifacts
+            # are still on the $TEMP_TAG release; recover by re-running this job
+            # (or manually: gh release edit "$TEMP_TAG" --tag "$FINAL_TAG").
             gh release delete "$FINAL_TAG" --yes   # drop the release, keep its git tag
           fi
           gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
@@ -274,6 +277,9 @@ jobs:
           $content -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
           $script = 'packaging/chocolatey/tools/chocolateyInstall.ps1'
           $content = Get-Content $script -Raw
+          # fail loud if a placeholder is absent — a silent no-op would push literal placeholders
+          if ($content -notmatch 'CHECKSUM_AMD64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_AMD64_PLACEHOLDER"; exit 1 }
+          if ($content -notmatch 'CHECKSUM_ARM64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_ARM64_PLACEHOLDER"; exit 1 }
           $content = $content -replace 'CHECKSUM_AMD64_PLACEHOLDER', $env:X64_HASH
           $content = $content -replace 'CHECKSUM_ARM64_PLACEHOLDER', $env:ARM64_HASH
           Set-Content $script $content

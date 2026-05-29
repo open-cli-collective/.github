@@ -159,6 +159,15 @@ def test_prefixed_url_template_missing_fails(tmp_path):
     assert any("url template" in e for e in errs)
 
 
+def test_dot_tag_lookalike_not_a_false_positive(tmp_path):
+    # a variable that merely starts with .Tag must not trip the {{ .Tag }} guard
+    cfg = _prefixed_cask(
+        tmp_path,
+        'url:\n              template: "https://github.com/o/r/releases/download/jtk-v{{ .Version }}/{{ .TagSubject }}.tar.gz"',
+    )
+    assert preflight.check_config(cfg, homebrew=True, tag_prefix="jtk-v") == []
+
+
 def test_main_exit_codes(tmp_path, capsys):
     good = tmp_path / "good.yml"
     good.write_text("release:\n  replace_existing_artifacts: true\n")
@@ -168,4 +177,6 @@ def test_main_exit_codes(tmp_path, capsys):
     assert preflight.main(["check-config", str(bad)]) == 1
     # --tag-prefix wiring (good config, no homebrew → prefix is a no-op)
     assert preflight.main(["check-config", str(good), "--tag-prefix", "jtk-v"]) == 0
+    # --tag-prefix with no value → usage error, not an IndexError traceback
+    assert preflight.main(["check-config", str(good), "--tag-prefix"]) == 2
     assert preflight.main(["bogus"]) == 2

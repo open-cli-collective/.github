@@ -18,10 +18,13 @@ Usage:
 Exits non-zero with a ::error:: line on any violation. Pure (no goreleaser run),
 so it is unit-tested with fixture configs.
 """
+import re
 import sys
 
 
 import yaml
+
+_DOT_TAG = re.compile(r"\{\{\s*\.Tag\s*\}\}")
 
 
 def _cask_url_template(cask: dict) -> str | None:
@@ -73,7 +76,7 @@ def check_config(path: str, homebrew: bool, tag_prefix: str = "v") -> list[str]:
                         f"pinning the '{tag_prefix}' tag prefix (monorepo tag "
                         "rename would otherwise 404)"
                     )
-                elif f"/download/{tag_prefix}" not in tmpl or ".Tag" in tmpl.replace(" ", ""):
+                elif f"/download/{tag_prefix}" not in tmpl or _DOT_TAG.search(tmpl):
                     errors.append(
                         f"homebrew_casks[{i}].url template must pin the release "
                         f"path to '/download/{tag_prefix}…' and not use "
@@ -95,7 +98,11 @@ def main(argv: list[str]) -> int:
     homebrew = "--homebrew" in rest
     tag_prefix = "v"
     if "--tag-prefix" in rest:
-        tag_prefix = rest[rest.index("--tag-prefix") + 1]
+        i = rest.index("--tag-prefix")
+        if i + 1 >= len(rest):
+            print("::error::--tag-prefix requires a value", file=sys.stderr)
+            return 2
+        tag_prefix = rest[i + 1]
     errors = check_config(path, homebrew, tag_prefix)
     for e in errors:
         print(f"::error::{e}", file=sys.stderr)
