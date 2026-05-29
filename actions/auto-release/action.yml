@@ -1,0 +1,115 @@
+name: Auto-release gate
+description: Decide whether a push should cut a release (path gate + conventional-commit gate) and compute the tag. No tags are pushed here.
+inputs:
+  release-paths:
+    description: "comma-separated globs that make a change release-worthy"
+    required: true
+  tool-paths:
+    description: "comma-separated monorepo scope globs (empty = whole repo)"
+    required: false
+    default: ""
+  version-file:
+    description: "version file (unioned into the path globs)"
+    required: true
+  tag-prefix:
+    description: "tag prefix, e.g. v or jtk-v"
+    required: true
+  version:
+    description: "MAJOR.MINOR from the version file"
+    required: true
+  run-number:
+    description: "patch number (GITHUB_RUN_NUMBER)"
+    required: true
+  before-sha:
+    description: "github.event.before"
+    required: true
+  after-sha:
+    description: "github.sha"
+    required: true
+  commit-message:
+    description: "head commit message (subject line is gated)"
+    required: true
+outputs:
+  should-release:
+    description: "true if both gates pass"
+    value: ${{ steps.gate.outputs.should-release }}
+  tag:
+    description: "computed tag <prefix><MAJOR.MINOR>.<run>"
+    value: ${{ steps.gate.outputs.tag }}
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        RELEASE_PATHS: ${{ inputs.release-paths }}
+        TOOL_PATHS: ${{ inputs.tool-paths }}
+        VERSION_FILE: ${{ inputs.version-file }}
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
+        VERSION: ${{ inputs.version }}
+        RUN: ${{ inputs.run-number }}
+        BEFORE: ${{ inputs.before-sha }}
+        AFTER: ${{ inputs.after-sha }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        gate="$ACTION_PATH/gate.sh"
+        ccheck="$ACTION_PATH/../conventional-commit/check.sh"
+        # fail loudly on a broken action layout rather than silently skipping releases
+        [ -f "$gate" ]   || { echo "::error::gate.sh not found at $gate"; exit 1; }
+        [ -f "$ccheck" ] || { echo "::error::conventional-commit/check.sh not found at $ccheck"; exit 1; }
+
+        # tag is computed (and the version validated) regardless of the gates
+        tag="$(bash "$gate" compute-tag "$TAG_PREFIX" "$VERSION" "$RUN")"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+        # --- determine changed files (push range, with fallbacks) ---
+        zero="0000000000000000000000000000000000000000"
+        failopen=false
+        if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+          if ! changed="$(git diff-tree --root --no-commit-id --name-only -r "$AFTER")"; then
+            echo "::warning::git diff-tree failed for initial push $AFTER; failing open on the path gate"
+            failopen=true
+          fi
+        elif git rev-parse -q --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
+          changed="$(git diff --name-only "$BEFORE" "$AFTER")"
+        else
+          echo "::warning::cannot compute diff range (${BEFORE}..${AFTER}); failing open on the path gate"
+          failopen=true
+        fi
+
+        # --- path gate: 0=match, 1=no-match, >1=script error (fail the job) ---
+        if [ "$failopen" = "true" ]; then
+          path_ok=true
+        else
+          set +e
+          printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE"
+          rc=${PIPESTATUS[1]}
+          set -e
+          case "$rc" in
+            0) path_ok=true ;;
+            1) path_ok=false ;;
+            *) echo "::error::gate.sh match-paths failed (rc=$rc)"; exit 1 ;;
+          esac
+        fi
+
+        # --- commit gate: subject line only; 0=match, 1=no-match, >1=error ---
+        subject="${COMMIT_MESSAGE%%$'\n'*}"
+        set +e
+        cc_out="$(bash "$ccheck" release-gate "$subject" 2>&1)"   # capture, don't suppress
+        rc=$?
+        set -e
+        case "$rc" in
+          0) commit_ok=true ;;
+          1) commit_ok=false ;;                       # no-match: cc_out is the expected ::error::, ignore it
+          *) echo "$cc_out"; echo "::error::conventional-commit check failed (rc=$rc)"; exit 1 ;;
+        esac
+
+        if [ "$path_ok" = "true" ] && [ "$commit_ok" = "true" ]; then
+          echo "should-release=true" >> "$GITHUB_OUTPUT"
+          echo "release gate: PASS -> $tag"
+        else
+          echo "should-release=false" >> "$GITHUB_OUTPUT"
+          echo "release gate: skip (path=$path_ok commit=$commit_ok)"
+        fi

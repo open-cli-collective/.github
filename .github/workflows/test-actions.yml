@@ -107,6 +107,14 @@ jobs:
           fi
           echo "ok: pr-title rejected the invalid title"
 
+  # auto-release gate logic (path matching, version validation, tag compute).
+  auto-release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash actions/auto-release/test_gate.sh
+        shell: bash
+
   # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
   identity-unit:
     runs-on: ubuntu-latest
