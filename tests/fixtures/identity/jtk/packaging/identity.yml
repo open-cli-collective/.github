@@ -1,0 +1,18 @@
+schema: open-cli-identity/v1
+repo: jtk-fixture
+binary: jtk
+goreleaser_config: .goreleaser.yml
+tag:
+  prefix: jtk-v
+  version_scheme: major_minor_run_patch
+archives:
+  name_template: "jtk_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+packages:
+  homebrew:
+    canonical_cask: jtk
+    alias_casks: [jira-ticket-cli]
+  winget: { id: OpenCLICollective.jira-ticket-cli }
+  chocolatey: { id: jira-ticket-cli }
+  linux: { package_name: jtk }
+
+version_file: version.txt

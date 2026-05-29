@@ -1,0 +1,17 @@
+schema: open-cli-identity/v1
+repo: nrq-fixture
+binary: nrq
+goreleaser_config: .goreleaser.yml
+tag:
+  prefix: v
+  version_scheme: major_minor_run_patch
+archives:
+  name_template: "nrq_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+packages:
+  homebrew:
+    canonical_cask: nrq
+  winget: { id: OpenCLICollective.newrelic-cli }
+  chocolatey: { id: nrq-cli }
+  linux: { package_name: nrq }
+
+version_file: version.txt

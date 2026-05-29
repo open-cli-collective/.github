@@ -1,0 +1,8 @@
+builds:
+  - binary: gro
+archives:
+  - name_template: "gro_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - package_name: google-readonly
+homebrew_casks:
+  - name: gro

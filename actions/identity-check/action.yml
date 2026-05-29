@@ -1,0 +1,62 @@
+name: Identity check
+description: Enforce packaging/identity.yml against tool-native files, and/or export the normalized manifest JSON (distribution.md §8.2).
+inputs:
+  manifest-path:
+    description: "identity.yml path relative to working-directory"
+    required: false
+    default: packaging/identity.yml
+  working-directory:
+    description: "module / tool root"
+    required: false
+    default: "."
+  require-manifest:
+    description: "fail if the manifest is absent (true for distributed repos; false for libraries)"
+    required: false
+    default: "true"
+  mode:
+    description: "validate | export-json | validate-and-export"
+    required: false
+    default: validate
+outputs:
+  identity-json:
+    description: "normalized manifest JSON (set when mode includes export) — the interface auto-release/release consume"
+    value: ${{ steps.run.outputs.identity-json }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: pip install "PyYAML==6.0.2" "defusedxml==0.7.1"
+    - id: run
+      shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest-path }}
+        WD: ${{ inputs.working-directory }}
+        REQUIRE: ${{ inputs.require-manifest }}
+        MODE: ${{ inputs.mode }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        script="$ACTION_PATH/identity.py"
+        case "$MODE" in
+          validate|export-json|validate-and-export) ;;
+          *) echo "::error::unknown mode '$MODE' (expected validate|export-json|validate-and-export)"; exit 1 ;;
+        esac
+        if [ "$MODE" = "validate" ] || [ "$MODE" = "validate-and-export" ]; then
+          python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
+        fi
+        if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
+          # capture first (incl. stderr) so a failure surfaces in the log and
+          # never leaks into $GITHUB_OUTPUT or leaves a dangling heredoc delimiter
+          if ! out="$(python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST" 2>&1)"; then
+            echo "$out"; exit 1
+          fi
+          delim="IDJSON_$(openssl rand -hex 8)"
+          {
+            echo "identity-json<<$delim"
+            printf '%s\n' "$out"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+        fi

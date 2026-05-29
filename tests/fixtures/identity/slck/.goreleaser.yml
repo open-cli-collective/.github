@@ -1,0 +1,8 @@
+builds:
+  - binary: slck
+archives:
+  - name_template: "slck_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - package_name: slck
+homebrew_casks:
+  - name: slck
