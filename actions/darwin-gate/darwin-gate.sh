@@ -38,10 +38,15 @@ check_macho() {
   file "$amd" | grep -q 'x86_64' || { echo "::error::amd64 binary is not x86_64 Mach-O"; return 1; }
   lipo -archs "$arm" | grep -qw arm64  || { echo "::error::lipo: arm64 slice missing"; return 1; }
   lipo -archs "$amd" | grep -qw x86_64 || { echo "::error::lipo: x86_64 slice missing"; return 1; }
-  # amd64 can't run on the arm64 runner: Security.framework linkage is a sound
-  # necessary cgo signal (CGO_ENABLED=0 omits it entirely).
-  otool -L "$amd" | grep -q '/System/Library/Frameworks/Security.framework' \
-    || { echo "::error::amd64 binary not linked against Security.framework (cgo missing)"; return 1; }
+  # Security.framework linkage is a sound necessary cgo signal (CGO_ENABLED=0
+  # omits it entirely). The arm64 probe already runs the binary, but assert
+  # linkage on BOTH slices so check-macho stands on its own — a cgo-disabled
+  # arm64 build shouldn't pass on the lipo arch check alone.
+  for pair in "arm64:$arm" "amd64:$amd"; do
+    arch="${pair%%:*}"; bin="${pair#*:}"
+    otool -L "$bin" | grep -q '/System/Library/Frameworks/Security.framework' \
+      || { echo "::error::$arch binary not linked against Security.framework (cgo missing)"; return 1; }
+  done
   echo "check-macho OK"
 }
 

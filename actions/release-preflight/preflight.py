@@ -13,17 +13,28 @@ distribution.md §8):
     canonical cask + aliases atomically.
 
 Usage:
-    preflight.py check-config <goreleaser.yml> [--homebrew]
+    preflight.py check-config <goreleaser.yml> [--homebrew] [--tag-prefix <p>]
 
 Exits non-zero with a ::error:: line on any violation. Pure (no goreleaser run),
 so it is unit-tested with fixture configs.
 """
 import sys
 
+
 import yaml
 
 
-def check_config(path: str, homebrew: bool) -> list[str]:
+def _cask_url_template(cask: dict) -> str | None:
+    """The cask download-URL template, whether url is a string or {template:}."""
+    url = (cask or {}).get("url")
+    if isinstance(url, dict):
+        return url.get("template")
+    if isinstance(url, str):
+        return url
+    return None
+
+
+def check_config(path: str, homebrew: bool, tag_prefix: str = "v") -> list[str]:
     with open(path) as fh:
         cfg = yaml.safe_load(fh) or {}
     errors: list[str] = []
@@ -42,6 +53,11 @@ def check_config(path: str, homebrew: bool) -> list[str]:
                 "homebrew is declared in the manifest but .goreleaser has no "
                 "homebrew_casks entry"
             )
+        # Monorepo prefixed-tag repos build under a temporary bare-SemVer tag
+        # (.Tag = the temp tag), so a cask URL that relies on {{ .Tag }} points
+        # at the tag we delete post-publish → 404. The url template MUST hardcode
+        # the final prefix instead (atlassian CLAUDE.md, the #1 release pitfall).
+        prefixed = tag_prefix not in ("", "v")
         for i, cask in enumerate(casks):
             if (cask or {}).get("skip_upload") is not True:
                 errors.append(
@@ -49,16 +65,38 @@ def check_config(path: str, homebrew: bool) -> list[str]:
                     "homebrew-alias step is the single atomic writer "
                     "(distribution.md §8.2)"
                 )
+            if prefixed:
+                tmpl = _cask_url_template(cask)
+                if not tmpl:
+                    errors.append(
+                        f"homebrew_casks[{i}] needs an explicit url template "
+                        f"pinning the '{tag_prefix}' tag prefix (monorepo tag "
+                        "rename would otherwise 404)"
+                    )
+                elif tag_prefix not in tmpl or ".Tag" in tmpl.replace(" ", ""):
+                    errors.append(
+                        f"homebrew_casks[{i}].url template must hardcode the "
+                        f"'{tag_prefix}' prefix and not use {{{{ .Tag }}}} "
+                        "(the temp SemVer tag is deleted post-publish)"
+                    )
     return errors
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[0] != "check-config":
-        print("usage: preflight.py check-config <goreleaser.yml> [--homebrew]", file=sys.stderr)
+        print(
+            "usage: preflight.py check-config <goreleaser.yml> "
+            "[--homebrew] [--tag-prefix <p>]",
+            file=sys.stderr,
+        )
         return 2
     path = argv[1]
-    homebrew = "--homebrew" in argv[2:]
-    errors = check_config(path, homebrew)
+    rest = argv[2:]
+    homebrew = "--homebrew" in rest
+    tag_prefix = "v"
+    if "--tag-prefix" in rest:
+        tag_prefix = rest[rest.index("--tag-prefix") + 1]
+    errors = check_config(path, homebrew, tag_prefix)
     for e in errors:
         print(f"::error::{e}", file=sys.stderr)
     if errors:

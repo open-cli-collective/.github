@@ -36,15 +36,19 @@ on:
       linux-dispatch-token:
         required: false
 
-# contents: write publishes the GitHub release via the ambient GITHUB_TOKEN.
-# Channels run as needs: jobs (not release:published triggers), so GITHUB_TOKEN
-# not firing downstream workflows is irrelevant here.
+# Least privilege: only the goreleaser job writes (it publishes the release via
+# the ambient GITHUB_TOKEN). Channels run as needs: jobs (not release:published
+# triggers); they only read the release (gh release download) or use their own
+# scoped tokens.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   goreleaser:
     runs-on: ${{ inputs.goreleaser-runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
     outputs:
       identity-json: ${{ steps.meta.outputs.identity-json }}
       version: ${{ steps.meta.outputs.version }}
@@ -116,6 +120,7 @@ jobs:
         with:
           goreleaser-config: ${{ fromJSON(steps.meta.outputs.identity-json).goreleaser_config }}
           homebrew: ${{ steps.meta.outputs.has-homebrew }}
+          tag-prefix: ${{ fromJSON(steps.meta.outputs.identity-json).tag.prefix }}
 
       - uses: actions/setup-go@v5
         with:
@@ -131,7 +136,9 @@ jobs:
 
       - name: Temporary SemVer tag (monorepo only)
         if: steps.meta.outputs.needs-rename == 'true'
-        run: git tag "${{ steps.meta.outputs.current-tag }}"
+        # -f: on a rerun, fetch-tags may have pulled a leftover temp tag locally;
+        # force-move it to HEAD rather than failing and blocking recovery.
+        run: git tag -f "${{ steps.meta.outputs.current-tag }}"
 
       - name: Build (snapshot, no publish)
         env:
@@ -147,24 +154,6 @@ jobs:
         with:
           dist-path: dist
           keychain-probe: ${{ toJSON(fromJSON(steps.meta.outputs.identity-json).keychain_probe) }}
-
-      # Assert the rendered canonical cask points at the FINAL release tag BEFORE
-      # we publish — a stale temp-tag URL would 404 (monorepo rename). Runs on the
-      # snapshot-rendered cask and in dry-run, so a bad URL is caught with nothing
-      # published. The snapshot build sets GORELEASER_CURRENT_TAG, so the cask
-      # url.template renders the same final-tag URL the publish run will.
-      - name: Assert cask URL pins the final tag
-        if: steps.meta.outputs.has-homebrew == 'true'
-        env:
-          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
-          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
-        run: |
-          set -euo pipefail
-          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
-          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
-          grep -q "/download/${FINAL_TAG}/" "$cask" \
-            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
-          echo "cask URL pins ${FINAL_TAG}"
 
       - name: Release (publish)
         if: ${{ !inputs.dry-run }}
@@ -195,13 +184,31 @@ jobs:
           gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
           git push origin ":refs/tags/$TEMP_TAG" || true   # temp tag may not be on the remote
 
+      # Confirm the published cask render (real .Version) actually pins the final
+      # tag. The url.template is gated statically pre-publish by release-preflight;
+      # this is the belt-and-suspenders check on the real artifact (the publish
+      # run renders .Version as the true version, unlike --snapshot).
+      - name: Confirm published cask URL pins the final tag
+        if: ${{ !inputs.dry-run && steps.meta.outputs.has-homebrew == 'true' }}
+        env:
+          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
+          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
+        run: |
+          set -euo pipefail
+          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
+          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
+          grep -q "/download/${FINAL_TAG}/" "$cask" \
+            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
+          echo "cask URL pins ${FINAL_TAG}"
+
       - name: Upload dist
         if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist
-          retention-days: 1
+          # window for re-running a failed channel job after the goreleaser job
+          retention-days: 5
 
   # The only job that holds homebrew-tap-token (kept out of the goreleaser job so
   # a skip_upload mistake can't push via GoReleaser). Writes canonical + aliases
@@ -252,13 +259,19 @@ jobs:
           $checksums = Get-Content checksums.txt
           $x64Hash = ($checksums | Select-String "windows_amd64.zip").Line.Split()[0]
           $arm64Hash = ($checksums | Select-String "windows_arm64.zip").Line.Split()[0]
+          # empty = the archive name template changed; fail rather than ship a bad hash
+          if (-not $x64Hash) { Write-Error "no windows_amd64.zip checksum in checksums.txt"; exit 1 }
+          if (-not $arm64Hash) { Write-Error "no windows_arm64.zip checksum in checksums.txt"; exit 1 }
           echo "X64_HASH=$x64Hash" >> $env:GITHUB_ENV
           echo "ARM64_HASH=$arm64Hash" >> $env:GITHUB_ENV
       - name: Update version and checksums
         shell: pwsh
         run: |
           $nuspec = "packaging/chocolatey/$env:CHOCO_ID.nuspec"
-          (Get-Content $nuspec) -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
+          $content = Get-Content $nuspec -Raw
+          # fail loud if the placeholder isn't present — a silent no-op would pack the wrong version
+          if ($content -notmatch '<version>0\.0\.0</version>') { Write-Error "nuspec $nuspec has no <version>0.0.0</version> placeholder"; exit 1 }
+          $content -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
           $script = 'packaging/chocolatey/tools/chocolateyInstall.ps1'
           $content = Get-Content $script -Raw
           $content = $content -replace 'CHECKSUM_AMD64_PLACEHOLDER', $env:X64_HASH
@@ -272,7 +285,9 @@ jobs:
           if (-not $env:CHOCO_API_KEY) { Write-Error "chocolatey-api-key secret is required"; exit 1 }
           cd packaging/chocolatey
           choco pack
-          choco push (Get-ChildItem *.nupkg).Name --source https://push.chocolatey.org/ --key $env:CHOCO_API_KEY
+          $pkgs = @(Get-ChildItem *.nupkg)
+          if ($pkgs.Count -ne 1) { Write-Error "expected exactly one .nupkg, found $($pkgs.Count)"; exit 1 }
+          choco push $pkgs[0].Name --source https://push.chocolatey.org/ --key $env:CHOCO_API_KEY
 
   # winget/linux are best-effort: Microsoft-hosted flakiness must not gate the
   # binary/Homebrew artifacts. Failure surfaces in the step summary.
@@ -297,6 +312,8 @@ jobs:
           $checksums = Get-Content checksums.txt
           $x64Name = ($checksums | Select-String "windows_amd64.zip").Line.Split()[-1]
           $arm64Name = ($checksums | Select-String "windows_arm64.zip").Line.Split()[-1]
+          if (-not $x64Name) { Write-Error "no windows_amd64.zip entry in checksums.txt"; exit 1 }
+          if (-not $arm64Name) { Write-Error "no windows_arm64.zip entry in checksums.txt"; exit 1 }
           $base = "https://github.com/$env:REPO/releases/download/$env:FINAL_TAG"
           echo "X64_URL=$base/$x64Name" >> $env:GITHUB_ENV
           echo "ARM64_URL=$base/$arm64Name" >> $env:GITHUB_ENV

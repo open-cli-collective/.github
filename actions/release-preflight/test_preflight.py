@@ -108,9 +108,64 @@ def test_homebrew_flag_off_ignores_casks(tmp_path):
     assert preflight.check_config(cfg, homebrew=False) == []
 
 
+# --- prefixed-tag (monorepo) cask URL template ---
+
+def _prefixed_cask(tmp_path, url_block: str) -> str:
+    return _write(tmp_path, f"""
+        release:
+          replace_existing_artifacts: true
+        homebrew_casks:
+          - name: jtk
+            skip_upload: true
+            {url_block}
+    """)
+
+
+def test_bare_v_prefix_ignores_url_template(tmp_path):
+    # single-module repos build under the real SemVer tag — no url-pin needed
+    cfg = _prefixed_cask(tmp_path, "")
+    assert preflight.check_config(cfg, homebrew=True, tag_prefix="v") == []
+
+
+def test_prefixed_url_template_pinning_prefix_ok(tmp_path):
+    cfg = _prefixed_cask(
+        tmp_path,
+        'url:\n              template: "https://github.com/o/r/releases/download/jtk-v{{ .Version }}/jtk_{{ .Version }}_{{ .Os }}_{{ .Arch }}.tar.gz"',
+    )
+    assert preflight.check_config(cfg, homebrew=True, tag_prefix="jtk-v") == []
+
+
+def test_prefixed_url_template_string_form_ok(tmp_path):
+    cfg = _prefixed_cask(
+        tmp_path,
+        'url: "https://github.com/o/r/releases/download/jtk-v{{ .Version }}/x.tar.gz"',
+    )
+    assert preflight.check_config(cfg, homebrew=True, tag_prefix="jtk-v") == []
+
+
+def test_prefixed_url_template_using_dot_tag_fails(tmp_path):
+    # {{ .Tag }} = the temp SemVer tag we delete post-publish → 404
+    cfg = _prefixed_cask(
+        tmp_path,
+        'url:\n              template: "https://github.com/o/r/releases/download/{{ .Tag }}/x.tar.gz"',
+    )
+    errs = preflight.check_config(cfg, homebrew=True, tag_prefix="jtk-v")
+    assert any(".Tag" in e for e in errs)
+
+
+def test_prefixed_url_template_missing_fails(tmp_path):
+    cfg = _prefixed_cask(tmp_path, "")
+    errs = preflight.check_config(cfg, homebrew=True, tag_prefix="jtk-v")
+    assert any("url template" in e for e in errs)
+
+
 def test_main_exit_codes(tmp_path, capsys):
-    good = _write(tmp_path, "release:\n  replace_existing_artifacts: true\n")
-    assert preflight.main(["check-config", good]) == 0
-    bad = _write(tmp_path, "release: {}\n")
-    assert preflight.main(["check-config", bad]) == 1
+    good = tmp_path / "good.yml"
+    good.write_text("release:\n  replace_existing_artifacts: true\n")
+    assert preflight.main(["check-config", str(good)]) == 0
+    bad = tmp_path / "bad.yml"
+    bad.write_text("release: {}\n")
+    assert preflight.main(["check-config", str(bad)]) == 1
+    # --tag-prefix wiring (good config, no homebrew → prefix is a no-op)
+    assert preflight.main(["check-config", str(good), "--tag-prefix", "jtk-v"]) == 0
     assert preflight.main(["bogus"]) == 2

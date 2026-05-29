@@ -48,9 +48,16 @@ runs:
         [ -f "$CANONICAL_FILE" ] || { echo "::error::canonical cask not found in dist: $CANONICAL_FILE"; exit 1; }
         [ -n "$TAP_TOKEN" ] || { echo "::error::tap-token is required to publish to $TAP_REPO"; exit 1; }
 
+        # Clone/push with the token via a credential helper, never embedded in
+        # the remote URL — so a transient git failure can't print the token to
+        # stderr before the Actions log masker redacts it.
         tmp="$(mktemp -d)"
-        git clone --depth 1 \
-          "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$tmp/tap"
+        remote="https://github.com/${TAP_REPO}.git"
+        # shellcheck disable=SC2016  # $TAP_TOKEN must expand when git runs the
+        # helper subshell (env-inherited), NOT in this outer shell.
+        helper='!f() { echo username=x-access-token; echo "password=${TAP_TOKEN}"; }; f'
+        gitc() { git -c credential.helper= -c "credential.helper=$helper" "$@"; }
+        gitc clone --depth 1 "$remote" "$tmp/tap"
         dest="$tmp/tap/$CASK_DIR"
         mkdir -p "$dest"
 
@@ -73,5 +80,5 @@ runs:
         fi
         # one commit = canonical + every alias land together (atomicity)
         git commit -m "Update ${CANONICAL_TOKEN} cask (canonical + aliases)"
-        git push origin HEAD
+        gitc push origin HEAD
         echo "::notice::published ${CANONICAL_TOKEN} (+aliases) to $TAP_REPO"

@@ -1,9 +1,11 @@
 name: Release config preflight
 description: >
   Static goreleaser-config asserts that must hold before goreleaser runs:
-  release.replace_existing_artifacts (idempotent re-runs) and, when homebrew is
+  release.replace_existing_artifacts (idempotent re-runs); when homebrew is
   declared, homebrew_casks[].skip_upload (so the homebrew-alias step is the
-  single atomic tap writer). Logic is in the unit-tested preflight.py.
+  single atomic tap writer); and for prefixed-tag (monorepo) repos, that the
+  cask url template pins the final prefix instead of {{ .Tag }} (the temp
+  SemVer tag is deleted post-publish). Logic is in the unit-tested preflight.py.
 inputs:
   goreleaser-config:
     description: "path to the .goreleaser config (from identity-json goreleaser_config)"
@@ -12,6 +14,10 @@ inputs:
     description: "true if homebrew is declared in the manifest"
     required: false
     default: "false"
+  tag-prefix:
+    description: "manifest tag prefix (e.g. v or jtk-v); drives the prefixed-tag URL check"
+    required: false
+    default: "v"
 runs:
   using: composite
   steps:
@@ -24,10 +30,11 @@ runs:
       env:
         GORELEASER_CONFIG: ${{ inputs.goreleaser-config }}
         HOMEBREW: ${{ inputs.homebrew }}
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         [ -f "$GORELEASER_CONFIG" ] || { echo "::error::goreleaser config not found: $GORELEASER_CONFIG"; exit 1; }
-        args=(check-config "$GORELEASER_CONFIG")
+        args=(check-config "$GORELEASER_CONFIG" --tag-prefix "$TAG_PREFIX")
         [ "$HOMEBREW" = "true" ] && args+=(--homebrew)
         python3 "$ACTION_PATH/preflight.py" "${args[@]}"
