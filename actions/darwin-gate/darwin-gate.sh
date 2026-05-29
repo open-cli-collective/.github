@@ -52,7 +52,7 @@ probe() {
   local xdg="$tmp/xdg"; mkdir -p "$xdg"
 
   # seed a hermetic config so auto-detect (not an override) selects the backend
-  local seed_path seed_content
+  local seed_path
   seed_path=$(printf '%s' "$spec" | jq -r '.seed_config.path // empty')
   if [ -n "$seed_path" ]; then
     mkdir -p "$xdg/$(dirname "$seed_path")"

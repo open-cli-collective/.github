@@ -1,0 +1,47 @@
+name: CGO-darwin pre-publish gate
+description: >
+  Prove the darwin binaries actually carry the Keychain (CGO) backend before
+  anything is published: artifact sanity, Mach-O arch + Security.framework
+  linkage, and a manifest-driven functional probe. Runs on a macOS runner only
+  (needs file/lipo/otool). All logic is in the unit-tested darwin-gate.sh.
+inputs:
+  dist-path:
+    description: "goreleaser dist directory (holds artifacts.json + binaries)"
+    required: false
+    default: dist
+  keychain-probe:
+    description: "the manifest's keychain_probe spec as JSON (from identity-json)"
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        DIST: ${{ inputs.dist-path }}
+        PROBE: ${{ inputs.keychain-probe }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        gate="$ACTION_PATH/darwin-gate.sh"
+        [ -f "$gate" ] || { echo "::error::darwin-gate.sh not found at $gate"; exit 1; }
+        art="$DIST/artifacts.json"
+        [ -f "$art" ] || { echo "::error::artifacts.json not found at $art"; exit 1; }
+
+        # 1. artifact sanity (one archive per darwin arch, both binaries present)
+        bash "$gate" check-artifacts "$art"
+
+        # 2. resolve the two darwin binary paths from artifacts.json
+        arm="$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="arm64")][0].path' "$art")"
+        amd="$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="amd64")][0].path' "$art")"
+        [ -n "$arm" ] && [ "$arm" != null ] && [ -f "$arm" ] || { echo "::error::arm64 darwin binary path not resolved"; exit 1; }
+        [ -n "$amd" ] && [ "$amd" != null ] && [ -f "$amd" ] || { echo "::error::amd64 darwin binary path not resolved"; exit 1; }
+
+        # 3. Mach-O arch + Security.framework linkage (cgo signal)
+        bash "$gate" check-macho "$arm" "$amd"
+
+        # 4. functional probe: seed config, run the arm64 binary (native on the
+        #    Apple-Silicon runner), assert it selected the keychain backend.
+        #    darwin-gate.sh probe takes the spec as a JSON string.
+        bash "$gate" probe "$PROBE" "$arm"
+        echo "::notice::CGO-darwin gate passed"

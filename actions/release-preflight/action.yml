@@ -1,0 +1,33 @@
+name: Release config preflight
+description: >
+  Static goreleaser-config asserts that must hold before goreleaser runs:
+  release.replace_existing_artifacts (idempotent re-runs) and, when homebrew is
+  declared, homebrew_casks[].skip_upload (so the homebrew-alias step is the
+  single atomic tap writer). Logic is in the unit-tested preflight.py.
+inputs:
+  goreleaser-config:
+    description: "path to the .goreleaser config (from identity-json goreleaser_config)"
+    required: true
+  homebrew:
+    description: "true if homebrew is declared in the manifest"
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: pip install "PyYAML==6.0.2"
+    - shell: bash
+      env:
+        GORELEASER_CONFIG: ${{ inputs.goreleaser-config }}
+        HOMEBREW: ${{ inputs.homebrew }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        [ -f "$GORELEASER_CONFIG" ] || { echo "::error::goreleaser config not found: $GORELEASER_CONFIG"; exit 1; }
+        args=(check-config "$GORELEASER_CONFIG")
+        [ "$HOMEBREW" = "true" ] && args+=(--homebrew)
+        python3 "$ACTION_PATH/preflight.py" "${args[@]}"

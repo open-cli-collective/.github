@@ -115,6 +115,38 @@ jobs:
       - run: bash actions/auto-release/test_gate.sh
         shell: bash
 
+  # darwin-gate portable halves (artifact sanity + the functional probe) via a
+  # stub binary. check-macho needs the macOS toolchain → exercised in a real #8
+  # release, not here.
+  darwin-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash actions/darwin-gate/test_darwin_gate.sh
+        shell: bash
+
+  # homebrew alias-cask rendering (token rename, verbatim url/checksum copy).
+  homebrew-alias:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash actions/homebrew-alias/test_alias.sh
+        shell: bash
+
+  # goreleaser-config preflight (replace_existing_artifacts + cask skip_upload).
+  release-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "PyYAML==6.0.2" "pytest>=8,<9"
+        shell: bash
+      - run: python -m pytest -q
+        shell: bash
+        working-directory: actions/release-preflight
+
   # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
   identity-unit:
     runs-on: ubuntu-latest
