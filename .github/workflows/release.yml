@@ -148,6 +148,24 @@ jobs:
           dist-path: dist
           keychain-probe: ${{ toJSON(fromJSON(steps.meta.outputs.identity-json).keychain_probe) }}
 
+      # Assert the rendered canonical cask points at the FINAL release tag BEFORE
+      # we publish — a stale temp-tag URL would 404 (monorepo rename). Runs on the
+      # snapshot-rendered cask and in dry-run, so a bad URL is caught with nothing
+      # published. The snapshot build sets GORELEASER_CURRENT_TAG, so the cask
+      # url.template renders the same final-tag URL the publish run will.
+      - name: Assert cask URL pins the final tag
+        if: steps.meta.outputs.has-homebrew == 'true'
+        env:
+          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
+          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
+        run: |
+          set -euo pipefail
+          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
+          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
+          grep -q "/download/${FINAL_TAG}/" "$cask" \
+            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
+          echo "cask URL pins ${FINAL_TAG}"
+
       - name: Release (publish)
         if: ${{ !inputs.dry-run }}
         env:
@@ -156,7 +174,10 @@ jobs:
         run: goreleaser release --clean -f "${{ steps.meta.outputs.goreleaser-config }}"
 
       # Rename the release from the temp SemVer tag to the final prefixed tag,
-      # then delete the temp tag (monorepo only).
+      # then delete the temp tag (monorepo only). Idempotent on rerun: a prior
+      # successful run already produced the final release, so drop that stale
+      # release (keep its tag) before moving this run's fresh temp release onto
+      # the final tag — otherwise the rename collides with the existing release.
       - name: Fix release tag (monorepo only)
         if: ${{ !inputs.dry-run && steps.meta.outputs.needs-rename == 'true' }}
         env:
@@ -167,23 +188,12 @@ jobs:
           BINARY: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
         run: |
           set -euo pipefail
+          if gh release view "$FINAL_TAG" >/dev/null 2>&1; then
+            echo "::notice::final release $FINAL_TAG already exists (rerun) — replacing it"
+            gh release delete "$FINAL_TAG" --yes   # drop the release, keep its git tag
+          fi
           gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
-          git push origin ":refs/tags/$TEMP_TAG"
-
-      # Assert the rendered canonical cask points at the FINAL release tag — a
-      # stale temp-tag URL would 404. Only meaningful when homebrew is declared.
-      - name: Assert cask URL pins the final tag
-        if: ${{ !inputs.dry-run && steps.meta.outputs.has-homebrew == 'true' }}
-        env:
-          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
-          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
-        run: |
-          set -euo pipefail
-          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
-          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not found in dist"; exit 1; }
-          grep -q "/download/${FINAL_TAG}/" "$cask" \
-            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
-          echo "cask URL pins ${FINAL_TAG}"
+          git push origin ":refs/tags/$TEMP_TAG" || true   # temp tag may not be on the remote
 
       - name: Upload dist
         if: ${{ !inputs.dry-run }}
@@ -295,13 +305,15 @@ jobs:
         env:
           WINGET_TOKEN: ${{ secrets.winget-token }}
         run: |
-          if (-not $env:WINGET_TOKEN) {
-            "::warning::winget-token not set — skipping winget submission" | Out-Host
-            "winget: skipped (no token)" >> $env:GITHUB_STEP_SUMMARY
-            exit 1
-          }
+          if (-not $env:WINGET_TOKEN) { Write-Error "winget-token not set"; exit 1 }
           Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
           ./wingetcreate.exe update $env:WINGET_ID --version $env:VERSION --urls $env:X64_URL $env:ARM64_URL --submit --token $env:WINGET_TOKEN
+      # Surface ANY failure (missing token, asset resolution, wingetcreate) — a
+      # continue-on-error job would otherwise go green with no trace.
+      - name: Note winget failure
+        if: ${{ failure() }}
+        shell: bash
+        run: echo "⚠️ winget channel failed for ${WINGET_ID} ${VERSION} — see the winget job logs" >> "$GITHUB_STEP_SUMMARY"
 
   linux-packages:
     needs: goreleaser
@@ -317,11 +329,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ -z "$DISPATCH_TOKEN" ]; then
-            echo "::warning::linux-dispatch-token not set — skipping linux-packages dispatch"
-            echo "linux-packages: skipped (no token)" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          [ -n "$DISPATCH_TOKEN" ] || { echo "::error::linux-dispatch-token not set"; exit 1; }
           payload="$(jq -nc --arg p "$PACKAGE" --arg v "$FINAL_TAG" --arg r "$REPO" \
             '{event_type:"package-release", client_payload:{package:$p, version:$v, repo:$r}}')"
           curl -fsSL -X POST \
@@ -330,3 +338,11 @@ jobs:
             "https://api.github.com/repos/open-cli-collective/linux-packages/dispatches" \
             -d "$payload"
           echo "dispatched package-release for $PACKAGE@$FINAL_TAG"
+      # Surface ANY failure (missing token, dispatch HTTP error) so a
+      # continue-on-error job can't go green silently.
+      - name: Note linux-packages failure
+        if: ${{ failure() }}
+        env:
+          PACKAGE: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.linux.package_name }}
+          FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
+        run: echo "⚠️ linux-packages dispatch failed for ${PACKAGE} ${FINAL_TAG} — see the linux-packages job logs" >> "$GITHUB_STEP_SUMMARY"
