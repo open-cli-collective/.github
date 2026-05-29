@@ -97,13 +97,13 @@ runs:
         # --- commit gate: subject line only; 0=match, 1=no-match, >1=error ---
         subject="${COMMIT_MESSAGE%%$'\n'*}"
         set +e
-        bash "$ccheck" release-gate "$subject" >/dev/null 2>&1
+        cc_out="$(bash "$ccheck" release-gate "$subject" 2>&1)"   # capture, don't suppress
         rc=$?
         set -e
         case "$rc" in
           0) commit_ok=true ;;
-          1) commit_ok=false ;;
-          *) echo "::error::conventional-commit check failed (rc=$rc)"; exit 1 ;;
+          1) commit_ok=false ;;                       # no-match: cc_out is the expected ::error::, ignore it
+          *) echo "$cc_out"; echo "::error::conventional-commit check failed (rc=$rc)"; exit 1 ;;
         esac
 
         if [ "$path_ok" = "true" ] && [ "$commit_ok" = "true" ]; then
