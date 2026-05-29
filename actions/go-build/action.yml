@@ -1,0 +1,22 @@
+name: Go build
+description: Set up Go from go.mod and run `make build` (repo-layout.md §4 Makefile contract; ci.md §3 go-version source).
+inputs:
+  go-version-file:
+    description: "go.mod path relative to working-directory"
+    required: false
+    default: go.mod
+  working-directory:
+    description: "Module root to build in"
+    required: false
+    default: "."
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        command -v make >/dev/null 2>&1 || { echo "::error::make not found on $RUNNER_OS — required by the go-build composite (repo-layout.md §4)"; exit 1; }
+        make build

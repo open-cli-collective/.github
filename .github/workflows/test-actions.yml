@@ -1,0 +1,108 @@
+name: Test actions
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-actions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Prove `make build` works on every shipped OS — Windows is the load-bearing one.
+  go-build-cross:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./actions/go-build
+        with:
+          working-directory: tests/fixtures/minimal
+
+  test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./actions/go-test
+        with:
+          working-directory: tests/fixtures/minimal
+      - uses: ./actions/go-test
+        with:
+          working-directory: tests/fixtures/minimal
+          target: test-cover
+      - uses: ./actions/go-lint
+        with:
+          working-directory: tests/fixtures/minimal
+
+  # Exercise the grammar via check.sh directly so expected-failure legs invert
+  # cleanly without continue-on-error gymnastics.
+  grammar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: grammar matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          check() { bash actions/conventional-commit/check.sh "$1" "$2" >/dev/null 2>&1; }
+          pass() { if check "$1" "$2"; then echo "ok   PASS [$1] $2"; else echo "::error::expected PASS [$1] $2"; exit 1; fi; }
+          fail() { if check "$1" "$2"; then echo "::error::expected FAIL [$1] $2"; exit 1; else echo "ok   FAIL [$1] $2"; fi; }
+
+          # title mode — full type set
+          pass title "feat: x"
+          pass title "fix(scope): y"
+          pass title "feat(api)!: z"
+          pass title "fix!: w"
+          pass title "fix(db)!: q"
+          pass title "chore: c"
+          pass title "docs: d"
+          fail title "wip"
+          fail title "Feature: x"
+          fail title "feat x"
+          fail title ": nope"
+
+          # release-gate — feat|fix only
+          pass release-gate "feat: x"
+          pass release-gate "fix(scope): y"
+          pass release-gate "feat!: z"
+          pass release-gate "fix(db)!: q"
+          fail release-gate "chore: c"
+          fail release-gate "docs: d"
+          fail release-gate "refactor: r"
+
+  # End-to-end through the action.yml wrappers (proves the env-passing wires up).
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: conventional-commit action (valid)
+        uses: ./actions/conventional-commit
+        with:
+          mode: title
+          message: "feat(api): wire up the thing"
+      - name: pr-title action (valid)
+        uses: ./actions/pr-title
+        with:
+          title: "fix: handle empty config"
+      # Negative case: proves the env→arg wiring actually rejects (a regression
+      # like an empty TITLE must not pass silently).
+      - name: pr-title action (invalid — must fail)
+        id: badtitle
+        continue-on-error: true
+        uses: ./actions/pr-title
+        with:
+          title: "not a conventional title"
+      - name: assert invalid title was rejected
+        shell: bash
+        run: |
+          if [ "${{ steps.badtitle.outcome }}" != "failure" ]; then
+            echo "::error::pr-title should have failed on an invalid title"; exit 1
+          fi
+          echo "ok: pr-title rejected the invalid title"

@@ -1,0 +1,32 @@
+name: Go lint
+description: Set up Go from go.mod and run golangci-lint. The golangci version is pinned here so a family-wide bump is one edit (ci.md §5/§7).
+inputs:
+  go-version-file:
+    description: "go.mod path relative to working-directory"
+    required: false
+    default: go.mod
+  working-directory:
+    description: "Module root to lint"
+    required: false
+    default: "."
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+    # A lint config is required; golangci defaults are non-conformant (repo-layout.md §5).
+    # Per-module config is the standard (ci.md §5: a go.work monorepo lints each
+    # module against its own config), so this intentionally requires a config in
+    # the module root and does NOT walk up to a shared parent.
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ ! -f .golangci.yml ] && [ ! -f .golangci.yaml ] && [ ! -f .golangci.toml ]; then
+          echo "::error::no .golangci.{yml,yaml,toml} in the module root — a per-module lint config is required (repo-layout.md §5, ci.md §5); golangci defaults are non-conformant"
+          exit 1
+        fi
+    - uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.12.2
+        working-directory: ${{ inputs.working-directory }}
