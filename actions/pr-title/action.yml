@@ -1,0 +1,16 @@
+name: PR title check
+description: Assert the pull request title is a conventional commit (full type set). Squash-merge makes the PR title the release-gating commit (release.md §1).
+inputs:
+  title:
+    description: "The pull request title (caller passes github.event.pull_request.title)"
+    required: true
+runs:
+  using: composite
+  steps:
+    # Calls the sibling grammar script directly: github.action_path/.. resolves
+    # within the checked-out action repo (a nested local `uses:` would resolve
+    # against the caller workspace instead). Title is untrusted — via env only.
+    - shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+      run: bash "${{ github.action_path }}/../conventional-commit/check.sh" title "$TITLE"

@@ -1,0 +1,12 @@
+# Minimal config so the go-lint composite has a config to run against.
+# Real repos enable the full floor set (repo-layout.md §5); this fixture only
+# needs to prove the composite invokes golangci-lint with a present config.
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell

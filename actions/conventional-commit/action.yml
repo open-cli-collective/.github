@@ -1,0 +1,18 @@
+name: Conventional commit check
+description: Validate a message against the canonical Open CLI Collective conventional-commit grammar (release.md §1.1).
+inputs:
+  mode:
+    description: "title (full type set) or release-gate (feat|fix subset)"
+    required: true
+  message:
+    description: "the message to validate"
+    required: true
+runs:
+  using: composite
+  steps:
+    # message/mode are caller-controlled — pass via env, never interpolate into run:
+    - shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        MESSAGE: ${{ inputs.message }}
+      run: bash "${{ github.action_path }}/check.sh" "$MODE" "$MESSAGE"

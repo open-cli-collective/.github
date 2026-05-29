@@ -1,0 +1,28 @@
+name: Go test
+description: Set up Go from go.mod and run the Makefile test target (default `make test`; pass target=test-cover for coverage).
+inputs:
+  go-version-file:
+    description: "go.mod path relative to working-directory"
+    required: false
+    default: go.mod
+  working-directory:
+    description: "Module root to test in"
+    required: false
+    default: "."
+  target:
+    description: "Makefile test target (e.g. test or test-cover)"
+    required: false
+    default: test
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        command -v make >/dev/null 2>&1 || { echo "::error::make not found on $RUNNER_OS — required by the go-test composite (repo-layout.md §4)"; exit 1; }
+        make "$TARGET"
