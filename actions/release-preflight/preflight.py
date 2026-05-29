@@ -73,11 +73,11 @@ def check_config(path: str, homebrew: bool, tag_prefix: str = "v") -> list[str]:
                         f"pinning the '{tag_prefix}' tag prefix (monorepo tag "
                         "rename would otherwise 404)"
                     )
-                elif tag_prefix not in tmpl or ".Tag" in tmpl.replace(" ", ""):
+                elif f"/download/{tag_prefix}" not in tmpl or ".Tag" in tmpl.replace(" ", ""):
                     errors.append(
-                        f"homebrew_casks[{i}].url template must hardcode the "
-                        f"'{tag_prefix}' prefix and not use {{{{ .Tag }}}} "
-                        "(the temp SemVer tag is deleted post-publish)"
+                        f"homebrew_casks[{i}].url template must pin the release "
+                        f"path to '/download/{tag_prefix}…' and not use "
+                        "{{ .Tag }} (the temp SemVer tag is deleted post-publish)"
                     )
     return errors
 
