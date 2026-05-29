@@ -1,0 +1,87 @@
+name: Auto-release gate
+description: Decide whether a push should cut a release (path gate + conventional-commit gate) and compute the tag. No tags are pushed here.
+inputs:
+  release-paths:
+    description: "comma-separated globs that make a change release-worthy"
+    required: true
+  tool-paths:
+    description: "comma-separated monorepo scope globs (empty = whole repo)"
+    required: false
+    default: ""
+  version-file:
+    description: "version file (unioned into the path globs)"
+    required: true
+  tag-prefix:
+    description: "tag prefix, e.g. v or jtk-v"
+    required: true
+  version:
+    description: "MAJOR.MINOR from the version file"
+    required: true
+  run-number:
+    description: "patch number (GITHUB_RUN_NUMBER)"
+    required: true
+  before-sha:
+    description: "github.event.before"
+    required: true
+  after-sha:
+    description: "github.sha"
+    required: true
+  commit-message:
+    description: "head commit message (subject line is gated)"
+    required: true
+outputs:
+  should-release:
+    description: "true if both gates pass"
+    value: ${{ steps.gate.outputs.should-release }}
+  tag:
+    description: "computed tag <prefix><MAJOR.MINOR>.<run>"
+    value: ${{ steps.gate.outputs.tag }}
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        RELEASE_PATHS: ${{ inputs.release-paths }}
+        TOOL_PATHS: ${{ inputs.tool-paths }}
+        VERSION_FILE: ${{ inputs.version-file }}
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
+        VERSION: ${{ inputs.version }}
+        RUN: ${{ inputs.run-number }}
+        BEFORE: ${{ inputs.before-sha }}
+        AFTER: ${{ inputs.after-sha }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        gate="$ACTION_PATH/gate.sh"
+        ccheck="$ACTION_PATH/../conventional-commit/check.sh"
+
+        # tag is computed (and the version validated) regardless of the gates
+        tag="$(bash "$gate" compute-tag "$TAG_PREFIX" "$VERSION" "$RUN")"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+        # --- path gate (with diff fallbacks) ---
+        zero="0000000000000000000000000000000000000000"
+        if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+          changed="$(git diff-tree --root --no-commit-id --name-only -r "$AFTER" || true)"
+          path_ok=$(printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE" && echo true || echo false)
+        elif git rev-parse -q --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
+          changed="$(git diff --name-only "$BEFORE" "$AFTER")"
+          path_ok=$(printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE" && echo true || echo false)
+        else
+          echo "::warning::cannot compute diff range (${BEFORE}..${AFTER}); failing open on the path gate"
+          path_ok=true
+        fi
+
+        # --- commit gate: subject line only ---
+        subject="${COMMIT_MESSAGE%%$'\n'*}"
+        if bash "$ccheck" release-gate "$subject" >/dev/null 2>&1; then commit_ok=true; else commit_ok=false; fi
+
+        if [ "$path_ok" = "true" ] && [ "$commit_ok" = "true" ]; then
+          echo "should-release=true" >> "$GITHUB_OUTPUT"
+          echo "release gate: PASS (path=$path_ok commit=$commit_ok) -> $tag"
+        else
+          echo "should-release=false" >> "$GITHUB_OUTPUT"
+          echo "release gate: skip (path=$path_ok commit=$commit_ok)"
+        fi
