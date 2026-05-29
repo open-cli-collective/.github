@@ -1,0 +1,371 @@
+name: Release (reusable)
+
+# Reusable workflow: triggered by the caller on a release tag (from auto-release,
+# #7). Builds with GoReleaser on macOS (CGO darwin can't cross-compile), gates the
+# Keychain backend, publishes the GitHub release, then fans out to the packaging
+# channels the manifest declares. Identity (tag prefix, binary, channels, probe)
+# comes from packaging/identity.yml via identity-check — a repo declares it once.
+# See cli-common distribution.md / release.md.
+#
+# NOTE: @v1 must be cut (rollout step #8 follow-up) before any caller can use
+# this workflow; until then the action refs below won't resolve.
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        type: string
+        default: packaging/identity.yml
+      working-directory:
+        type: string
+        default: "."
+      goreleaser-runner:
+        # pinned Apple-Silicon; CGO darwin needs a native macOS toolchain.
+        type: string
+        default: macos-15
+      dry-run:
+        # build + gate + render, skip every publish/push.
+        type: boolean
+        default: false
+    secrets:
+      homebrew-tap-token:
+        required: false
+      chocolatey-api-key:
+        required: false
+      winget-token:
+        required: false
+      linux-dispatch-token:
+        required: false
+
+# Least privilege: only the goreleaser job writes (it publishes the release via
+# the ambient GITHUB_TOKEN). Channels run as needs: jobs (not release:published
+# triggers); they only read the release (gh release download) or use their own
+# scoped tokens.
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    runs-on: ${{ inputs.goreleaser-runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      identity-json: ${{ steps.meta.outputs.identity-json }}
+      version: ${{ steps.meta.outputs.version }}
+      final-tag: ${{ steps.meta.outputs.final-tag }}
+      has-homebrew: ${{ steps.meta.outputs.has-homebrew }}
+      has-winget: ${{ steps.meta.outputs.has-winget }}
+      has-chocolatey: ${{ steps.meta.outputs.has-chocolatey }}
+      has-linux: ${{ steps.meta.outputs.has-linux }}
+      has-keychain: ${{ steps.meta.outputs.has-keychain }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # validate identity AND export the normalized manifest in one call.
+      - id: identity
+        uses: open-cli-collective/.github/actions/identity-check@v1
+        with:
+          manifest-path: ${{ inputs.manifest-path }}
+          working-directory: ${{ inputs.working-directory }}
+          mode: validate-and-export
+
+      - id: meta
+        shell: bash
+        env:
+          IDJSON: ${{ steps.identity.outputs.identity-json }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          prefix="$(printf '%s' "$IDJSON" | jq -r '.tag.prefix // "v"')"
+          # the tag that triggered the release (e.g. jtk-v0.1.75 or v1.0.150)
+          final_tag="$REF_NAME"
+          case "$final_tag" in
+            "$prefix"*) version="${final_tag#"$prefix"}" ;;
+            *) echo "::error::tag '$final_tag' does not start with manifest prefix '$prefix'"; exit 1 ;;
+          esac
+          # Monorepo prefixed tags (e.g. jtk-v…) aren't valid SemVer, so GoReleaser
+          # can't parse them. Mint a temporary bare-SemVer tag and point GoReleaser
+          # at it; the .goreleaser url templates pin the FINAL prefixed tag so the
+          # rendered download URLs don't 404 after the post-publish rename. A bare-v
+          # repo's tag is already SemVer — no temp tag, no rename.
+          if [ "$prefix" != "v" ]; then
+            current_tag="v${version}"; needs_rename=true
+          else
+            current_tag="$final_tag"; needs_rename=false
+          fi
+          has() { [ "$(printf '%s' "$IDJSON" | jq -r "$1")" != "null" ] && echo true || echo false; }
+          {
+            # re-emit the normalized manifest as a single compact line for downstream jobs
+            echo "identity-json=$(printf '%s' "$IDJSON" | jq -c .)"
+            echo "version=$version"
+            echo "final-tag=$final_tag"
+            echo "goreleaser-config=$(printf '%s' "$IDJSON" | jq -r '.goreleaser_config')"
+            echo "current-tag=$current_tag"
+            echo "needs-rename=$needs_rename"
+            echo "has-homebrew=$(has '.packages.homebrew.canonical_cask')"
+            echo "has-winget=$(has '.packages.winget.id')"
+            echo "has-chocolatey=$(has '.packages.chocolatey.id')"
+            echo "has-linux=$(has '.packages.linux.package_name')"
+            echo "has-keychain=$(has '.keychain_probe')"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $final_tag (version $version, prefix '$prefix', current-tag $current_tag)"
+
+      # goreleaser-config preflight: idempotent re-runs + cask skip_upload so the
+      # homebrew-alias step is the single atomic tap writer. goreleaser_config is
+      # repo-root-relative (goreleaser runs from root in both repo shapes).
+      - uses: open-cli-collective/.github/actions/release-preflight@v1
+        with:
+          goreleaser-config: ${{ fromJSON(steps.meta.outputs.identity-json).goreleaser_config }}
+          homebrew: ${{ steps.meta.outputs.has-homebrew }}
+          tag-prefix: ${{ fromJSON(steps.meta.outputs.identity-json).tag.prefix }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ inputs.working-directory }}/go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          install-only: true
+
+      - name: GoReleaser check
+        run: goreleaser check -f "${{ steps.meta.outputs.goreleaser-config }}"
+
+      - name: Temporary SemVer tag (monorepo only)
+        if: steps.meta.outputs.needs-rename == 'true'
+        # -f: on a rerun, fetch-tags may have pulled a leftover temp tag locally;
+        # force-move it to HEAD rather than failing and blocking recovery.
+        run: git tag -f "${{ steps.meta.outputs.current-tag }}"
+
+      - name: Build (snapshot, no publish)
+        env:
+          GORELEASER_CURRENT_TAG: ${{ steps.meta.outputs.current-tag }}
+        run: goreleaser release --snapshot --clean -f "${{ steps.meta.outputs.goreleaser-config }}"
+
+      # CGO-darwin pre-publish gate — prove the Keychain backend is present on
+      # the snapshot artifacts BEFORE we publish. Skipped for tools that declare
+      # no keychain_probe (no credstore backend to verify).
+      - name: CGO-darwin gate
+        if: steps.meta.outputs.has-keychain == 'true'
+        uses: open-cli-collective/.github/actions/darwin-gate@v1
+        with:
+          dist-path: dist
+          keychain-probe: ${{ toJSON(fromJSON(steps.meta.outputs.identity-json).keychain_probe) }}
+
+      - name: Release (publish)
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ steps.meta.outputs.current-tag }}
+        run: goreleaser release --clean -f "${{ steps.meta.outputs.goreleaser-config }}"
+
+      # Rename the release from the temp SemVer tag to the final prefixed tag,
+      # then delete the temp tag (monorepo only). Idempotent on rerun: a prior
+      # successful run already produced the final release, so drop that stale
+      # release (keep its tag) before moving this run's fresh temp release onto
+      # the final tag — otherwise the rename collides with the existing release.
+      - name: Fix release tag (monorepo only)
+        if: ${{ !inputs.dry-run && steps.meta.outputs.needs-rename == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEMP_TAG: ${{ steps.meta.outputs.current-tag }}
+          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          BINARY: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
+        run: |
+          set -euo pipefail
+          if gh release view "$FINAL_TAG" >/dev/null 2>&1; then
+            echo "::notice::final release $FINAL_TAG already exists (rerun) — replacing it"
+            # If the rename below fails after this delete, this run's artifacts
+            # are still on the $TEMP_TAG release; recover by re-running this job
+            # (or manually: gh release edit "$TEMP_TAG" --tag "$FINAL_TAG").
+            gh release delete "$FINAL_TAG" --yes   # drop the release, keep its git tag
+          fi
+          gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
+          git push origin ":refs/tags/$TEMP_TAG" || true   # temp tag may not be on the remote
+
+      # Confirm the published cask render (real .Version) actually pins the final
+      # tag. The url.template is gated statically pre-publish by release-preflight;
+      # this is the belt-and-suspenders check on the real artifact (the publish
+      # run renders .Version as the true version, unlike --snapshot).
+      - name: Confirm published cask URL pins the final tag
+        if: ${{ !inputs.dry-run && steps.meta.outputs.has-homebrew == 'true' }}
+        env:
+          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
+          FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
+        run: |
+          set -euo pipefail
+          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
+          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
+          grep -q "/download/${FINAL_TAG}/" "$cask" \
+            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
+          echo "cask URL pins ${FINAL_TAG}"
+
+      - name: Upload dist
+        if: ${{ !inputs.dry-run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          # window for re-running a failed channel job after the goreleaser job
+          retention-days: 5
+
+  # The only job that holds homebrew-tap-token (kept out of the goreleaser job so
+  # a skip_upload mistake can't push via GoReleaser). Writes canonical + aliases
+  # atomically. Hard-fail: a broken tap publish must fail the release loudly.
+  homebrew:
+    needs: goreleaser
+    if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-homebrew == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - id: locate
+        shell: bash
+        env:
+          CANONICAL: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.canonical_cask }}
+        run: |
+          set -euo pipefail
+          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
+          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not found in dist artifact"; exit 1; }
+          echo "cask=$cask" >> "$GITHUB_OUTPUT"
+      - uses: open-cli-collective/.github/actions/homebrew-alias@v1
+        with:
+          canonical-cask-file: ${{ steps.locate.outputs.cask }}
+          canonical-token: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.canonical_cask }}
+          alias-tokens: ${{ join(fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.alias_casks, ' ') }}
+          tap-repo: open-cli-collective/homebrew-tap
+          tap-token: ${{ secrets.homebrew-tap-token }}
+
+  chocolatey:
+    needs: goreleaser
+    if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-chocolatey == 'true' }}
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.goreleaser.outputs.version }}
+      FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
+      CHOCO_ID: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.chocolatey.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get checksums from release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$env:FINAL_TAG" --pattern "checksums.txt" --dir .
+          $checksums = Get-Content checksums.txt
+          $x64Hash = ($checksums | Select-String "windows_amd64.zip").Line.Split()[0]
+          $arm64Hash = ($checksums | Select-String "windows_arm64.zip").Line.Split()[0]
+          # empty = the archive name template changed; fail rather than ship a bad hash
+          if (-not $x64Hash) { Write-Error "no windows_amd64.zip checksum in checksums.txt"; exit 1 }
+          if (-not $arm64Hash) { Write-Error "no windows_arm64.zip checksum in checksums.txt"; exit 1 }
+          echo "X64_HASH=$x64Hash" >> $env:GITHUB_ENV
+          echo "ARM64_HASH=$arm64Hash" >> $env:GITHUB_ENV
+      - name: Update version and checksums
+        shell: pwsh
+        run: |
+          $nuspec = "packaging/chocolatey/$env:CHOCO_ID.nuspec"
+          $content = Get-Content $nuspec -Raw
+          # fail loud if the placeholder isn't present — a silent no-op would pack the wrong version
+          if ($content -notmatch '<version>0\.0\.0</version>') { Write-Error "nuspec $nuspec has no <version>0.0.0</version> placeholder"; exit 1 }
+          $content -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
+          $script = 'packaging/chocolatey/tools/chocolateyInstall.ps1'
+          $content = Get-Content $script -Raw
+          # fail loud if a placeholder is absent — a silent no-op would push literal placeholders
+          if ($content -notmatch 'CHECKSUM_AMD64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_AMD64_PLACEHOLDER"; exit 1 }
+          if ($content -notmatch 'CHECKSUM_ARM64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_ARM64_PLACEHOLDER"; exit 1 }
+          $content = $content -replace 'CHECKSUM_AMD64_PLACEHOLDER', $env:X64_HASH
+          $content = $content -replace 'CHECKSUM_ARM64_PLACEHOLDER', $env:ARM64_HASH
+          Set-Content $script $content
+      - name: Pack and push
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.chocolatey-api-key }}
+        run: |
+          if (-not $env:CHOCO_API_KEY) { Write-Error "chocolatey-api-key secret is required"; exit 1 }
+          cd packaging/chocolatey
+          choco pack
+          $pkgs = @(Get-ChildItem *.nupkg)
+          if ($pkgs.Count -ne 1) { Write-Error "expected exactly one .nupkg, found $($pkgs.Count)"; exit 1 }
+          choco push $pkgs[0].Name --source https://push.chocolatey.org/ --key $env:CHOCO_API_KEY
+
+  # winget/linux are best-effort: Microsoft-hosted flakiness must not gate the
+  # binary/Homebrew artifacts. Failure surfaces in the step summary.
+  winget:
+    needs: goreleaser
+    if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-winget == 'true' }}
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      VERSION: ${{ needs.goreleaser.outputs.version }}
+      FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
+      WINGET_ID: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve windows asset URLs from the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release download "$env:FINAL_TAG" --pattern "checksums.txt" --dir .
+          $checksums = Get-Content checksums.txt
+          $x64Name = ($checksums | Select-String "windows_amd64.zip").Line.Split()[-1]
+          $arm64Name = ($checksums | Select-String "windows_arm64.zip").Line.Split()[-1]
+          if (-not $x64Name) { Write-Error "no windows_amd64.zip entry in checksums.txt"; exit 1 }
+          if (-not $arm64Name) { Write-Error "no windows_arm64.zip entry in checksums.txt"; exit 1 }
+          $base = "https://github.com/$env:REPO/releases/download/$env:FINAL_TAG"
+          echo "X64_URL=$base/$x64Name" >> $env:GITHUB_ENV
+          echo "ARM64_URL=$base/$arm64Name" >> $env:GITHUB_ENV
+      - name: Submit to winget
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.winget-token }}
+        run: |
+          if (-not $env:WINGET_TOKEN) { Write-Error "winget-token not set"; exit 1 }
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe update $env:WINGET_ID --version $env:VERSION --urls $env:X64_URL $env:ARM64_URL --submit --token $env:WINGET_TOKEN
+      # Surface ANY failure (missing token, asset resolution, wingetcreate) — a
+      # continue-on-error job would otherwise go green with no trace.
+      - name: Note winget failure
+        if: ${{ failure() }}
+        shell: bash
+        run: echo "⚠️ winget channel failed for ${WINGET_ID} ${VERSION} — see the winget job logs" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-packages:
+    needs: goreleaser
+    if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-linux == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Dispatch linux-packages build
+        env:
+          DISPATCH_TOKEN: ${{ secrets.linux-dispatch-token }}
+          PACKAGE: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.linux.package_name }}
+          FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [ -n "$DISPATCH_TOKEN" ] || { echo "::error::linux-dispatch-token not set"; exit 1; }
+          payload="$(jq -nc --arg p "$PACKAGE" --arg v "$FINAL_TAG" --arg r "$REPO" \
+            '{event_type:"package-release", client_payload:{package:$p, version:$v, repo:$r}}')"
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/open-cli-collective/linux-packages/dispatches" \
+            -d "$payload"
+          echo "dispatched package-release for $PACKAGE@$FINAL_TAG"
+      # Surface ANY failure (missing token, dispatch HTTP error) so a
+      # continue-on-error job can't go green silently.
+      - name: Note linux-packages failure
+        if: ${{ failure() }}
+        env:
+          PACKAGE: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.linux.package_name }}
+          FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
+        run: echo "⚠️ linux-packages dispatch failed for ${PACKAGE} ${FINAL_TAG} — see the linux-packages job logs" >> "$GITHUB_STEP_SUMMARY"
