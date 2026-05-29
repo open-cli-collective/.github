@@ -1,0 +1,8 @@
+builds:
+  - binary: nrq
+archives:
+  - name_template: "nrq_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - package_name: nrq
+homebrew_casks:
+  - name: nrq

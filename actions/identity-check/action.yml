@@ -1,0 +1,51 @@
+name: Identity check
+description: Enforce packaging/identity.yml against tool-native files, and/or export the normalized manifest JSON (distribution.md §8.2).
+inputs:
+  manifest-path:
+    description: "identity.yml path relative to working-directory"
+    required: false
+    default: packaging/identity.yml
+  working-directory:
+    description: "module / tool root"
+    required: false
+    default: "."
+  require-manifest:
+    description: "fail if the manifest is absent (true for distributed repos; false for libraries)"
+    required: false
+    default: "true"
+  mode:
+    description: "validate | export-json | validate-and-export"
+    required: false
+    default: validate
+outputs:
+  identity-json:
+    description: "normalized manifest JSON (set when mode includes export) — the interface auto-release/release consume"
+    value: ${{ steps.run.outputs.identity-json }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: pip install "PyYAML==6.0.2"
+    - id: run
+      shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest-path }}
+        WD: ${{ inputs.working-directory }}
+        REQUIRE: ${{ inputs.require-manifest }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        script="${{ github.action_path }}/identity.py"
+        if [ "$MODE" = "validate" ] || [ "$MODE" = "validate-and-export" ]; then
+          python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
+        fi
+        if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
+          {
+            echo "identity-json<<__IDJSON__"
+            python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST"
+            echo "__IDJSON__"
+          } >> "$GITHUB_OUTPUT"
+        fi

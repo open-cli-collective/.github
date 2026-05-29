@@ -1,0 +1,16 @@
+schema: open-cli-identity/v1
+repo: slck-fixture
+binary: slck
+goreleaser_config: .goreleaser.yml
+tag:
+  prefix: v
+  version_scheme: major_minor_run_patch
+archives:
+  name_template: "slck_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+packages:
+  homebrew:
+    canonical_cask: slck
+    alias_casks: [slack-chat-cli]
+  winget: { id: OpenCLICollective.slack-chat-cli }
+  chocolatey: { id: slack-chat-cli }
+  linux: { package_name: slck }

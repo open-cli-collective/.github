@@ -1,0 +1,15 @@
+schema: open-cli-identity/v1
+repo: gro-fixture
+binary: gro
+goreleaser_config: .goreleaser.yml
+tag:
+  prefix: v
+  version_scheme: major_minor_run_patch
+archives:
+  name_template: "gro_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+packages:
+  homebrew:
+    canonical_cask: gro
+  winget: { id: OpenCLICollective.google-readonly }
+  chocolatey: { id: google-readonly }
+  linux: { package_name: google-readonly }

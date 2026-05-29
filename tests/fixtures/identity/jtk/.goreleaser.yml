@@ -1,0 +1,8 @@
+builds:
+  - binary: jtk
+archives:
+  - name_template: "jtk_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - package_name: jtk
+homebrew_casks:
+  - name: jtk

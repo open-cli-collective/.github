@@ -106,3 +106,52 @@ jobs:
             echo "::error::pr-title should have failed on an invalid title"; exit 1
           fi
           echo "ok: pr-title rejected the invalid title"
+
+  # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
+  identity-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "PyYAML==6.0.2" pytest
+        shell: bash
+      - run: python -m pytest -q
+        shell: bash
+        working-directory: actions/identity-check
+
+  # identity-check ACTION against the golden fixtures (real grandfathered identities).
+  identity-fixtures:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [slck, gro, nrq, jtk]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./actions/identity-check
+        with:
+          working-directory: tests/fixtures/identity/${{ matrix.fixture }}
+
+  # Exercise the action's export-json output and the require-manifest=false skip.
+  identity-interface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: export
+        uses: ./actions/identity-check
+        with:
+          working-directory: tests/fixtures/identity/jtk
+          mode: export-json
+      - name: assert export-json output
+        shell: bash
+        env:
+          IDJSON: ${{ steps.export.outputs.identity-json }}
+        run: |
+          echo "$IDJSON" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['binary']=='jtk'; assert d['tag']['prefix']=='jtk-v'; print('ok export-json')"
+      - name: require-manifest=false skips when absent
+        uses: ./actions/identity-check
+        with:
+          working-directory: tests/fixtures/minimal
+          require-manifest: "false"
