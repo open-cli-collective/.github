@@ -48,9 +48,11 @@ runs:
           python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
         fi
         if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
-          # capture first; on failure `set -e` aborts before we touch $GITHUB_OUTPUT,
-          # so an ::error:: never leaks into the output / leaves a dangling delimiter
-          out="$(python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST")"
+          # capture first (incl. stderr) so a failure surfaces in the log and
+          # never leaks into $GITHUB_OUTPUT or leaves a dangling heredoc delimiter
+          if ! out="$(python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST" 2>&1)"; then
+            echo "$out"; exit 1
+          fi
           delim="IDJSON_$(openssl rand -hex 8)"
           {
             echo "identity-json<<$delim"
