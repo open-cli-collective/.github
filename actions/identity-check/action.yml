@@ -28,7 +28,7 @@ runs:
       with:
         python-version: "3.12"
     - shell: bash
-      run: pip install "PyYAML==6.0.2"
+      run: pip install "PyYAML==6.0.2" "defusedxml==0.7.1"
     - id: run
       shell: bash
       env:
@@ -36,16 +36,18 @@ runs:
         WD: ${{ inputs.working-directory }}
         REQUIRE: ${{ inputs.require-manifest }}
         MODE: ${{ inputs.mode }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        script="${{ github.action_path }}/identity.py"
+        script="$ACTION_PATH/identity.py"
         if [ "$MODE" = "validate" ] || [ "$MODE" = "validate-and-export" ]; then
           python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
         fi
         if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
+          delim="IDJSON_$(openssl rand -hex 8)"
           {
-            echo "identity-json<<__IDJSON__"
+            echo "identity-json<<$delim"
             python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST"
-            echo "__IDJSON__"
+            echo "$delim"
           } >> "$GITHUB_OUTPUT"
         fi

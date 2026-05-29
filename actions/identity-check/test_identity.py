@@ -150,6 +150,37 @@ def test_missing_manifest_not_required_skips(tmp_path):
     assert rc == 0
 
 
+def test_binary_omitted_fails(tmp_path):
+    g = copy.deepcopy(BASE_GORELEASER)
+    del g["builds"][0]["binary"]  # goreleaser would infer — unverifiable
+    wd = build(tmp_path, goreleaser=g)
+    assert any("binary:' explicitly" in e for e in identity.validate(manifest_path(wd), wd))
+
+
+def test_goreleaser_missing_still_reports_winget_drift(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["goreleaser_config"] = "nope.yml"  # mis-named
+    wd = build(tmp_path, manifest=m)
+    bad = os.path.join(wd, "packaging", "winget", "OpenCLICollective.slack-chat-cli.yaml")
+    with open(bad, "w") as fh:
+        yaml.safe_dump({"PackageIdentifier": "OpenCLICollective.wrong"}, fh)
+    errs = identity.validate(manifest_path(wd), wd)
+    assert any("goreleaser_config not found" in e for e in errs)
+    assert any("PackageIdentifier" in e for e in errs)  # not hidden by the goreleaser miss
+
+
+def test_malformed_nuspec_clean_error(tmp_path):
+    wd = build(tmp_path)
+    nuspec = os.path.join(wd, "packaging", "chocolatey", "slack-chat-cli.nuspec")
+    open(nuspec, "w").write("<package><metadata><id>oops")  # truncated XML
+    with pytest.raises(identity.ManifestError):
+        identity.validate(manifest_path(wd), wd)
+
+
+def test_export_json_missing_manifest_errors(tmp_path):
+    assert identity.main(["export-json", "--working-dir", str(tmp_path)]) == 1
+
+
 def test_export_json_shape(tmp_path):
     wd = build(tmp_path)
     norm = identity.normalize(identity.load_manifest(manifest_path(wd)))
