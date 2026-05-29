@@ -13,6 +13,9 @@ _split_csv() { local IFS=','; for x in $1; do [ -n "$x" ] && printf '%s\n' "$x";
 
 # Translate a path glob into a bash `case` pattern: ** -> * (case patterns
 # already match across '/', so a single * suffices for "any depth").
+# NOTE: in a bash `case`, a single `*` also matches '/', so `*.go` matches
+# `internal/foo.go` — broader than POSIX pathname globbing. Callers passing
+# single-`*` patterns get this any-depth behavior intentionally.
 _glob_to_pat() { printf '%s' "${1//\*\*/*}"; }
 
 validate_version() {

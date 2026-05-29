@@ -56,31 +56,59 @@ runs:
         set -euo pipefail
         gate="$ACTION_PATH/gate.sh"
         ccheck="$ACTION_PATH/../conventional-commit/check.sh"
+        # fail loudly on a broken action layout rather than silently skipping releases
+        [ -f "$gate" ]   || { echo "::error::gate.sh not found at $gate"; exit 1; }
+        [ -f "$ccheck" ] || { echo "::error::conventional-commit/check.sh not found at $ccheck"; exit 1; }
 
         # tag is computed (and the version validated) regardless of the gates
         tag="$(bash "$gate" compute-tag "$TAG_PREFIX" "$VERSION" "$RUN")"
         echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-        # --- path gate (with diff fallbacks) ---
+        # --- determine changed files (push range, with fallbacks) ---
         zero="0000000000000000000000000000000000000000"
+        failopen=false
         if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
-          changed="$(git diff-tree --root --no-commit-id --name-only -r "$AFTER" || true)"
-          path_ok=$(printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE" && echo true || echo false)
+          if ! changed="$(git diff-tree --root --no-commit-id --name-only -r "$AFTER")"; then
+            echo "::warning::git diff-tree failed for initial push $AFTER; failing open on the path gate"
+            failopen=true
+          fi
         elif git rev-parse -q --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
           changed="$(git diff --name-only "$BEFORE" "$AFTER")"
-          path_ok=$(printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE" && echo true || echo false)
         else
           echo "::warning::cannot compute diff range (${BEFORE}..${AFTER}); failing open on the path gate"
-          path_ok=true
+          failopen=true
         fi
 
-        # --- commit gate: subject line only ---
+        # --- path gate: 0=match, 1=no-match, >1=script error (fail the job) ---
+        if [ "$failopen" = "true" ]; then
+          path_ok=true
+        else
+          set +e
+          printf '%s\n' "$changed" | bash "$gate" match-paths "$RELEASE_PATHS" "$TOOL_PATHS" "$VERSION_FILE"
+          rc=${PIPESTATUS[1]}
+          set -e
+          case "$rc" in
+            0) path_ok=true ;;
+            1) path_ok=false ;;
+            *) echo "::error::gate.sh match-paths failed (rc=$rc)"; exit 1 ;;
+          esac
+        fi
+
+        # --- commit gate: subject line only; 0=match, 1=no-match, >1=error ---
         subject="${COMMIT_MESSAGE%%$'\n'*}"
-        if bash "$ccheck" release-gate "$subject" >/dev/null 2>&1; then commit_ok=true; else commit_ok=false; fi
+        set +e
+        bash "$ccheck" release-gate "$subject" >/dev/null 2>&1
+        rc=$?
+        set -e
+        case "$rc" in
+          0) commit_ok=true ;;
+          1) commit_ok=false ;;
+          *) echo "::error::conventional-commit check failed (rc=$rc)"; exit 1 ;;
+        esac
 
         if [ "$path_ok" = "true" ] && [ "$commit_ok" = "true" ]; then
           echo "should-release=true" >> "$GITHUB_OUTPUT"
-          echo "release gate: PASS (path=$path_ok commit=$commit_ok) -> $tag"
+          echo "release gate: PASS -> $tag"
         else
           echo "should-release=false" >> "$GITHUB_OUTPUT"
           echo "release gate: skip (path=$path_ok commit=$commit_ok)"
