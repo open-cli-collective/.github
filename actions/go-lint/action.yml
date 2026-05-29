@@ -15,12 +15,15 @@ runs:
     - uses: actions/setup-go@v5
       with:
         go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
-    # A shared lint config is required; golangci defaults are non-conformant (repo-layout.md §5).
+    # A lint config is required; golangci defaults are non-conformant (repo-layout.md §5).
+    # Per-module config is the standard (ci.md §5: a go.work monorepo lints each
+    # module against its own config), so this intentionally requires a config in
+    # the module root and does NOT walk up to a shared parent.
     - shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        if [ ! -f .golangci.yml ] && [ ! -f .golangci.yaml ]; then
-          echo "::error::no .golangci.yml in the module root — a shared lint config is required (repo-layout.md §5); golangci defaults are non-conformant"
+        if [ ! -f .golangci.yml ] && [ ! -f .golangci.yaml ] && [ ! -f .golangci.toml ]; then
+          echo "::error::no .golangci.{yml,yaml,toml} in the module root — a per-module lint config is required (repo-layout.md §5, ci.md §5); golangci defaults are non-conformant"
           exit 1
         fi
     - uses: golangci/golangci-lint-action@v7

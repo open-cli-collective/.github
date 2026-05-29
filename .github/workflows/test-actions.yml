@@ -91,3 +91,18 @@ jobs:
         uses: ./actions/pr-title
         with:
           title: "fix: handle empty config"
+      # Negative case: proves the env→arg wiring actually rejects (a regression
+      # like an empty TITLE must not pass silently).
+      - name: pr-title action (invalid — must fail)
+        id: badtitle
+        continue-on-error: true
+        uses: ./actions/pr-title
+        with:
+          title: "not a conventional title"
+      - name: assert invalid title was rejected
+        shell: bash
+        run: |
+          if [ "${{ steps.badtitle.outcome }}" != "failure" ]; then
+            echo "::error::pr-title should have failed on an invalid title"; exit 1
+          fi
+          echo "ok: pr-title rejected the invalid title"
