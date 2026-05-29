@@ -33,8 +33,11 @@ class ManifestError(Exception):
 
 
 def _load_yaml(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        raise ManifestError(f"{path}: invalid YAML: {exc}") from exc
     if not isinstance(data, dict):
         raise ManifestError(f"{path}: expected a YAML mapping")
     return data
@@ -60,6 +63,7 @@ def normalize(m: dict) -> dict:
     return {
         "binary": m["binary"],
         "repo": m.get("repo"),
+        "version_file": m.get("version_file", "version.txt"),
         "goreleaser_config": m["goreleaser_config"],
         "tag": {"prefix": tag.get("prefix", "v"), "version_scheme": tag.get("version_scheme")},
         "archives": {"name_template": (m.get("archives", {}) or {}).get("name_template")},
@@ -107,7 +111,9 @@ def validate(manifest_path: str, working_dir: str) -> list[str]:
 
     if gor is not None:
         builds = gor.get("builds", []) or []
-        if builds:
+        if not builds:
+            errors.append("goreleaser has no builds — cannot verify the binary against the manifest")
+        else:
             # GoReleaser infers binary from the module when `binary:` is omitted,
             # which we can't verify — so require it explicit (else the drift guard
             # silently passes on an inferred name that may differ).
@@ -119,9 +125,12 @@ def validate(manifest_path: str, working_dir: str) -> list[str]:
 
         want_tmpl = (m.get("archives", {}) or {}).get("name_template")
         if want_tmpl:
-            for arc in gor.get("archives", []) or []:
+            archives = gor.get("archives", []) or []
+            if not archives:
+                errors.append(f"manifest declares archives.name_template but .goreleaser has no archives")
+            for arc in archives:
                 got = arc.get("name_template")
-                if got is not None and got != want_tmpl:
+                if got != want_tmpl:  # missing or mismatched both fail
                     errors.append(f"goreleaser archive name_template '{got}' != manifest '{want_tmpl}'")
 
     pkgs = m.get("packages", {}) or {}
@@ -173,9 +182,13 @@ def validate(manifest_path: str, working_dir: str) -> list[str]:
         nuspecs = glob.glob(os.path.join(cdir, "*.nuspec"))
         if not nuspecs:
             errors.append(f"manifest declares chocolatey.id '{choco_id}' but no .nuspec in {cdir}")
-        elif not any(_nuspec_id(n) == choco_id for n in nuspecs):
-            found = {_nuspec_id(n) for n in nuspecs}
-            errors.append(f"no .nuspec <id> matches chocolatey.id '{choco_id}' (found {sorted(found)})")
+        else:
+            # every .nuspec must match — a stale extra one with a different <id>
+            # could still publish under the wrong name, so it fails the check.
+            for n in nuspecs:
+                got = _nuspec_id(n)
+                if got != choco_id:
+                    errors.append(f"{n}: <id> '{got}' != chocolatey.id '{choco_id}'")
 
     return errors
 

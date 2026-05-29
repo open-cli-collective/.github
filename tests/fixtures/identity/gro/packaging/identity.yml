@@ -13,3 +13,5 @@ packages:
   winget: { id: OpenCLICollective.google-readonly }
   chocolatey: { id: google-readonly }
   linux: { package_name: google-readonly }
+
+version_file: version.txt

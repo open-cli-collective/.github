@@ -13,3 +13,5 @@ packages:
   winget: { id: OpenCLICollective.newrelic-cli }
   chocolatey: { id: nrq-cli }
   linux: { package_name: nrq }
+
+version_file: version.txt

@@ -11,6 +11,7 @@ BASE_MANIFEST = {
     "schema": "open-cli-identity/v1",
     "repo": "slack-chat-api",
     "binary": "slck",
+    "version_file": "version.txt",
     "goreleaser_config": ".goreleaser.yml",
     "tag": {"prefix": "v", "version_scheme": "major_minor_run_patch"},
     "archives": {"name_template": "slck_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"},
@@ -177,6 +178,28 @@ def test_malformed_nuspec_clean_error(tmp_path):
         identity.validate(manifest_path(wd), wd)
 
 
+def test_no_builds_fails(tmp_path):
+    g = copy.deepcopy(BASE_GORELEASER)
+    g["builds"] = []
+    wd = build(tmp_path, goreleaser=g)
+    assert any("no builds" in e for e in identity.validate(manifest_path(wd), wd))
+
+
+def test_no_archives_when_template_declared_fails(tmp_path):
+    g = copy.deepcopy(BASE_GORELEASER)
+    g["archives"] = []
+    wd = build(tmp_path, goreleaser=g)
+    assert any("no archives" in e for e in identity.validate(manifest_path(wd), wd))
+
+
+def test_stale_extra_nuspec_fails(tmp_path):
+    wd = build(tmp_path)
+    # a second .nuspec with a different <id> must fail, not be ignored
+    extra = os.path.join(wd, "packaging", "chocolatey", "stale.nuspec")
+    open(extra, "w").write(NUSPEC.format(id="stale-id"))
+    assert any("stale-id" in e for e in identity.validate(manifest_path(wd), wd))
+
+
 def test_export_json_missing_manifest_errors(tmp_path):
     assert identity.main(["export-json", "--working-dir", str(tmp_path)]) == 1
 
@@ -189,3 +212,4 @@ def test_export_json_shape(tmp_path):
     assert norm["archives"]["name_template"].startswith("slck_v")
     assert norm["packages"]["homebrew"]["alias_casks"] == ["slack-chat-cli"]
     assert norm["packages"]["linux"]["package_name"] == "slck"
+    assert norm["version_file"] == "version.txt"

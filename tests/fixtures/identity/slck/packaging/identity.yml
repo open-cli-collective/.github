@@ -14,3 +14,5 @@ packages:
   winget: { id: OpenCLICollective.slack-chat-cli }
   chocolatey: { id: slack-chat-cli }
   linux: { package_name: slck }
+
+version_file: version.txt

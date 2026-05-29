@@ -14,3 +14,5 @@ packages:
   winget: { id: OpenCLICollective.jira-ticket-cli }
   chocolatey: { id: jira-ticket-cli }
   linux: { package_name: jtk }
+
+version_file: version.txt

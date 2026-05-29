@@ -40,14 +40,21 @@ runs:
       run: |
         set -euo pipefail
         script="$ACTION_PATH/identity.py"
+        case "$MODE" in
+          validate|export-json|validate-and-export) ;;
+          *) echo "::error::unknown mode '$MODE' (expected validate|export-json|validate-and-export)"; exit 1 ;;
+        esac
         if [ "$MODE" = "validate" ] || [ "$MODE" = "validate-and-export" ]; then
           python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
         fi
         if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
+          # capture first; on failure `set -e` aborts before we touch $GITHUB_OUTPUT,
+          # so an ::error:: never leaks into the output / leaves a dangling delimiter
+          out="$(python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST")"
           delim="IDJSON_$(openssl rand -hex 8)"
           {
             echo "identity-json<<$delim"
-            python "$script" export-json --working-dir "$WD" --manifest "$MANIFEST"
+            printf '%s\n' "$out"
             echo "$delim"
           } >> "$GITHUB_OUTPUT"
         fi
