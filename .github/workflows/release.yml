@@ -269,6 +269,9 @@ jobs:
           echo "ARM64_HASH=$arm64Hash" >> $env:GITHUB_ENV
       - name: Update version and checksums
         shell: pwsh
+        # paths are tool-local: working-directory-relative so a monorepo's
+        # tools/<tool>/packaging/chocolatey resolves (flat repos pass ".").
+        working-directory: ${{ inputs.working-directory }}
         run: |
           $nuspec = "packaging/chocolatey/$env:CHOCO_ID.nuspec"
           $content = Get-Content $nuspec -Raw
@@ -285,6 +288,7 @@ jobs:
           Set-Content $script $content
       - name: Pack and push
         shell: pwsh
+        working-directory: ${{ inputs.working-directory }}
         env:
           CHOCO_API_KEY: ${{ secrets.chocolatey-api-key }}
         run: |
