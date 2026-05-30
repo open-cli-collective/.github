@@ -70,35 +70,35 @@ def manifest_path(wd):
 
 def test_pass(tmp_path):
     wd = build(tmp_path)
-    assert identity.validate(manifest_path(wd), wd) == []
+    assert identity.validate(manifest_path(wd), wd, wd) == []
 
 
 def test_drift_binary(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["builds"][0]["binary"] = "wrong"
     wd = build(tmp_path, goreleaser=g)
-    assert any("binary" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("binary" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_drift_archive_template(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["archives"][0]["name_template"] = "slck_{{ .Version }}"
     wd = build(tmp_path, goreleaser=g)
-    assert any("name_template" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("name_template" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_drift_nfpm_package_name(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["nfpms"][0]["package_name"] = "wrong"
     wd = build(tmp_path, goreleaser=g)
-    assert any("nfpm" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("nfpm" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_declared_homebrew_without_block_fails(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     del g["homebrew_casks"]
     wd = build(tmp_path, goreleaser=g)
-    assert any("homebrew" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("homebrew" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_drift_winget_id(tmp_path):
@@ -107,13 +107,13 @@ def test_drift_winget_id(tmp_path):
     bad = os.path.join(wd, "packaging", "winget", "OpenCLICollective.slack-chat-cli.installer.yaml")
     with open(bad, "w") as fh:
         yaml.safe_dump({"PackageIdentifier": "OpenCLICollective.wrong"}, fh)
-    assert any("PackageIdentifier" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("PackageIdentifier" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_missing_winget_manifest(tmp_path):
     wd = build(tmp_path)
     os.remove(os.path.join(wd, "packaging", "winget", "OpenCLICollective.slack-chat-cli.installer.yaml"))
-    assert any("installer manifest missing" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("installer manifest missing" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_drift_choco_id(tmp_path):
@@ -123,7 +123,7 @@ def test_drift_choco_id(tmp_path):
     wd = build(tmp_path, manifest=m)
     nuspec = os.path.join(wd, "packaging", "chocolatey", "expected-id.nuspec")
     open(nuspec, "w").write(NUSPEC.format(id="actually-different"))
-    assert any("chocolatey.id" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("chocolatey.id" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_namespaced_nuspec_id_extracted(tmp_path):
@@ -138,7 +138,7 @@ def test_namespaced_nuspec_id_extracted(tmp_path):
     g = {"builds": [{"binary": "nrq"}], "archives": [{"name_template": "nrq_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}],
          "nfpms": [{"package_name": "nrq"}], "homebrew_casks": [{"name": "nrq"}]}
     wd = build(tmp_path, manifest=m, goreleaser=g)
-    assert identity.validate(manifest_path(wd), wd) == []
+    assert identity.validate(manifest_path(wd), wd, wd) == []
 
 
 def test_missing_manifest_required_fails(tmp_path):
@@ -155,7 +155,7 @@ def test_binary_omitted_fails(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     del g["builds"][0]["binary"]  # goreleaser would infer — unverifiable
     wd = build(tmp_path, goreleaser=g)
-    assert any("binary:' explicitly" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("binary:' explicitly" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_goreleaser_missing_still_reports_winget_drift(tmp_path):
@@ -165,7 +165,7 @@ def test_goreleaser_missing_still_reports_winget_drift(tmp_path):
     bad = os.path.join(wd, "packaging", "winget", "OpenCLICollective.slack-chat-cli.yaml")
     with open(bad, "w") as fh:
         yaml.safe_dump({"PackageIdentifier": "OpenCLICollective.wrong"}, fh)
-    errs = identity.validate(manifest_path(wd), wd)
+    errs = identity.validate(manifest_path(wd), wd, wd)
     assert any("goreleaser_config not found" in e for e in errs)
     assert any("PackageIdentifier" in e for e in errs)  # not hidden by the goreleaser miss
 
@@ -175,21 +175,21 @@ def test_malformed_nuspec_clean_error(tmp_path):
     nuspec = os.path.join(wd, "packaging", "chocolatey", "slack-chat-cli.nuspec")
     open(nuspec, "w").write("<package><metadata><id>oops")  # truncated XML
     with pytest.raises(identity.ManifestError):
-        identity.validate(manifest_path(wd), wd)
+        identity.validate(manifest_path(wd), wd, wd)
 
 
 def test_no_builds_fails(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["builds"] = []
     wd = build(tmp_path, goreleaser=g)
-    assert any("no builds" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("no builds" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_no_archives_when_template_declared_fails(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["archives"] = []
     wd = build(tmp_path, goreleaser=g)
-    assert any("no archives" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("no archives" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_stale_extra_nuspec_fails(tmp_path):
@@ -197,7 +197,7 @@ def test_stale_extra_nuspec_fails(tmp_path):
     # a second .nuspec with a different <id> must fail, not be ignored
     extra = os.path.join(wd, "packaging", "chocolatey", "stale.nuspec")
     open(extra, "w").write(NUSPEC.format(id="stale-id"))
-    assert any("stale-id" in e for e in identity.validate(manifest_path(wd), wd))
+    assert any("stale-id" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 def test_export_json_missing_manifest_errors(tmp_path):
@@ -213,3 +213,61 @@ def test_export_json_shape(tmp_path):
     assert norm["packages"]["homebrew"]["alias_casks"] == ["slack-chat-cli"]
     assert norm["packages"]["linux"]["package_name"] == "slck"
     assert norm["version_file"] == "version.txt"
+
+
+# --- monorepo: tool-local identity + packaging under tools/<tool>, but the
+# goreleaser config lives at the repo root and resolves via --repo-root, not
+# --working-dir (distribution.md §8.3). Models atlassian-cli's cfl tool. ---
+
+def build_monorepo(tmp_path, tool="cfl", goreleaser_config=".goreleaser-cfl.yml"):
+    """cfl-shaped fixture: root-level goreleaser config, tool-local packaging.
+    Returns (repo_root, working_dir)."""
+    m = {
+        "schema": "open-cli-identity/v1",
+        "repo": "atlassian-cli",
+        "binary": tool,
+        "version_file": "version.txt",
+        "goreleaser_config": goreleaser_config,
+        "tag": {"prefix": f"{tool}-v", "version_scheme": "major_minor_run_patch"},
+        "archives": {"name_template": "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"},
+        "packages": {
+            "homebrew": {"canonical_cask": tool},
+            "winget": {"id": f"OpenCLICollective.{tool}"},
+            "chocolatey": {"id": "confluence-cli"},
+            "linux": {"package_name": tool},
+        },
+    }
+    g = {
+        "builds": [{"binary": tool, "dir": f"tools/{tool}"}],
+        "archives": [{"name_template": "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"}],
+        "nfpms": [{"package_name": tool}],
+        "homebrew_casks": [{"name": tool}],
+    }
+    # goreleaser config at the REPO ROOT
+    (tmp_path / goreleaser_config).write_text(yaml.safe_dump(g))
+    # tool-local identity + packaging under tools/<tool>
+    wd = tmp_path / "tools" / tool
+    (wd / "packaging" / "winget").mkdir(parents=True, exist_ok=True)
+    (wd / "packaging" / "chocolatey").mkdir(parents=True, exist_ok=True)
+    (wd / "packaging" / "identity.yml").write_text(yaml.safe_dump(m))
+    wid = m["packages"]["winget"]["id"]
+    for suffix in (".yaml", ".installer.yaml", ".locale.en-US.yaml"):
+        (wd / "packaging" / "winget" / f"{wid}{suffix}").write_text(yaml.safe_dump({"PackageIdentifier": wid}))
+    cid = m["packages"]["chocolatey"]["id"]
+    (wd / "packaging" / "chocolatey" / f"{cid}.nuspec").write_text(NUSPEC.format(id=cid))
+    return str(tmp_path), str(wd)
+
+
+def test_monorepo_root_relative_goreleaser_passes(tmp_path):
+    repo_root, wd = build_monorepo(tmp_path)
+    # working_dir=tools/cfl finds tool-local packaging; repo_root finds the
+    # root goreleaser config. Asymmetric resolution → clean.
+    assert identity.validate(os.path.join(wd, "packaging", "identity.yml"), wd, repo_root) == []
+
+
+def test_monorepo_goreleaser_not_found_under_working_dir(tmp_path):
+    # Regression guard: the root goreleaser config must NOT be resolved relative
+    # to working_dir — if repo_root is (wrongly) the tool dir, it isn't found.
+    repo_root, wd = build_monorepo(tmp_path)
+    errs = identity.validate(os.path.join(wd, "packaging", "identity.yml"), wd, wd)
+    assert any("goreleaser_config not found" in e for e in errs)

@@ -6,7 +6,11 @@ inputs:
     required: false
     default: packaging/identity.yml
   working-directory:
-    description: "module / tool root"
+    description: "module / tool root — manifest, packaging/, and version_file resolve here"
+    required: false
+    default: "."
+  repo-root:
+    description: "checkout root — goreleaser_config resolves here (distribution.md §8.3). Default '.' suits flat repos and monorepos whose goreleaser configs live at the repo root."
     required: false
     default: "."
   require-manifest:
@@ -34,6 +38,7 @@ runs:
       env:
         MANIFEST: ${{ inputs.manifest-path }}
         WD: ${{ inputs.working-directory }}
+        REPO_ROOT: ${{ inputs.repo-root }}
         REQUIRE: ${{ inputs.require-manifest }}
         MODE: ${{ inputs.mode }}
         ACTION_PATH: ${{ github.action_path }}
@@ -45,7 +50,7 @@ runs:
           *) echo "::error::unknown mode '$MODE' (expected validate|export-json|validate-and-export)"; exit 1 ;;
         esac
         if [ "$MODE" = "validate" ] || [ "$MODE" = "validate-and-export" ]; then
-          python "$script" validate --working-dir "$WD" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
+          python "$script" validate --working-dir "$WD" --repo-root "$REPO_ROOT" --manifest "$MANIFEST" --require-manifest "$REQUIRE"
         fi
         if [ "$MODE" = "export-json" ] || [ "$MODE" = "validate-and-export" ]; then
           # capture first (incl. stderr) so a failure surfaces in the log and

@@ -9,8 +9,11 @@ Subcommands:
   export-json  print the normalized manifest as JSON (consumed by the
                auto-release / release workflows so they never re-parse YAML)
 
-Paths in the manifest (goreleaser_config) and the packaging/ dirs resolve
-relative to --working-dir.
+Path resolution is asymmetric (distribution.md §8.3): the tool-local identity —
+the manifest, its packaging/ dirs, and version_file — resolves relative to
+--working-dir, while goreleaser_config resolves relative to --repo-root (the
+checkout root), because goreleaser is a repo-root release operation even in a
+monorepo. For a flat repo both default to "." so behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -94,15 +97,25 @@ def _nuspec_id(path: str) -> str | None:
     return None
 
 
-def validate(manifest_path: str, working_dir: str) -> list[str]:
-    """Return a list of drift errors (empty == clean)."""
+def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list[str]:
+    """Return a list of drift errors (empty == clean).
+
+    Path resolution is intentionally ASYMMETRIC (distribution.md §8.3):
+    `goreleaser_config` resolves relative to `repo_root` (goreleaser is the
+    release-orchestration layer and, in a monorepo, runs from the repo root with
+    root context — go.work, shared modules, root tags), while the tool-local
+    identity (`packaging/*`, `version_file`, and the manifest itself) resolves
+    relative to `working_dir`. For a flat repo the two are the same dir, so
+    behavior is unchanged; a monorepo passes `working_dir=tools/<tool>` and leaves
+    `repo_root` at the checkout root.
+    """
     m = load_manifest(manifest_path)
     errors: list[str] = []
 
     # --- .goreleaser (binary + archive templates). If it's missing, record the
     # error but still run the packaging/ checks below — they don't need it, so a
     # mis-named goreleaser file shouldn't hide winget/choco drift. ---
-    gor_path = os.path.join(working_dir, m["goreleaser_config"])
+    gor_path = os.path.join(repo_root, m["goreleaser_config"])
     gor: dict | None = None
     if not os.path.isfile(gor_path):
         errors.append(f"goreleaser_config not found: {gor_path}")
@@ -206,7 +219,7 @@ def cmd_validate(args) -> int:
         print(f"no identity manifest at {manifest_path}; require-manifest is false — skipping")
         return 0
     try:
-        errors = validate(manifest_path, args.working_dir)
+        errors = validate(manifest_path, args.working_dir, args.repo_root)
     except ManifestError as exc:
         print(f"::error::{exc}")
         return 1
@@ -244,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--manifest", default="packaging/identity.yml")
         if name == "validate":
             sp.add_argument("--require-manifest", type=_bool, default=True)
+            # goreleaser_config resolves relative to --repo-root (the checkout
+            # root), NOT --working-dir — see validate(). Defaults to "." so flat
+            # repos (working-dir ".") are unchanged; a monorepo leaves it at the
+            # checkout root while pointing --working-dir at tools/<tool>.
+            sp.add_argument("--repo-root", default=".")
     args = p.parse_args(argv)
     return cmd_validate(args) if args.cmd == "validate" else cmd_export_json(args)
 

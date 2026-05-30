@@ -173,6 +173,22 @@ jobs:
       - uses: ./actions/identity-check
         with:
           working-directory: tests/fixtures/identity/${{ matrix.fixture }}
+          # self-contained fixtures: the goreleaser config is co-located with the
+          # manifest, so repo-root == working-directory (a flat-repo shape). The
+          # monorepo root-vs-tool asymmetry is covered by identity-unit.
+          repo-root: tests/fixtures/identity/${{ matrix.fixture }}
+
+  # Monorepo shape: tool-local identity/packaging under tools/<tool>, but the
+  # goreleaser config lives at the repo root and resolves via repo-root (≠
+  # working-directory). Proves the action's repo-root plumbing end-to-end.
+  identity-monorepo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./actions/identity-check
+        with:
+          working-directory: tests/fixtures/identity/monorepo/tools/cfl
+          repo-root: tests/fixtures/identity/monorepo
 
   # Exercise the action's export-json output and the require-manifest=false skip.
   identity-interface:
@@ -195,6 +211,7 @@ jobs:
         uses: ./actions/identity-check
         with:
           working-directory: tests/fixtures/identity/slck
+          repo-root: tests/fixtures/identity/slck
           mode: validate-and-export
       - name: assert validate-and-export emitted json
         shell: bash

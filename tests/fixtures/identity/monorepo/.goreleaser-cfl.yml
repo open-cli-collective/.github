@@ -1,0 +1,9 @@
+builds:
+  - binary: cfl
+    dir: tools/cfl
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - package_name: cfl
+homebrew_casks:
+  - name: cfl
