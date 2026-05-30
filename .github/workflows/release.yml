@@ -187,22 +187,34 @@ jobs:
           gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
           git push origin ":refs/tags/$TEMP_TAG" || true   # temp tag may not be on the remote
 
-      # Confirm the published cask render (real .Version) actually pins the final
-      # tag. The url.template is gated statically pre-publish by release-preflight;
-      # this is the belt-and-suspenders check on the real artifact (the publish
-      # run renders .Version as the true version, unlike --snapshot).
+      # Confirm the published cask render (real .Version) pins the final tag.
+      # release-preflight intentionally lets bare-v repos omit url.template, so the
+      # default cask renders the tag as Homebrew interpolation (/download/v#{version}/)
+      # rather than a literal tag — and even url.template repos commit the interpolated
+      # form to the tap. Both pin the final tag (Homebrew resolves #{version} at
+      # install), so accept either the literal final tag or the final-tag prefix plus
+      # #{version}. A prefixed repo (e.g. jtk-v) that emits a bare v#{version} still
+      # fails, preserving the wrong-prefix guard.
       - name: Confirm published cask URL pins the final tag
         if: ${{ !inputs.dry-run && steps.meta.outputs.has-homebrew == 'true' }}
         env:
           CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
           FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
           [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
-          grep -q "/download/${FINAL_TAG}/" "$cask" \
-            || { echo "::error::cask $cask does not pin the final tag ${FINAL_TAG} in its download URL"; exit 1; }
-          echo "cask URL pins ${FINAL_TAG}"
+          # The final tag ends with the version; the prefix is everything before it
+          # ("v" for bare repos, "jtk-v" for prefixed ones).
+          prefix="${FINAL_TAG%"$VERSION"}"
+          interp_tag="${prefix}#{version}"
+          if grep -Fq "/download/${FINAL_TAG}/" "$cask" || grep -Fq "/download/${interp_tag}/" "$cask"; then
+            echo "cask URL pins ${FINAL_TAG} (literal or ${interp_tag})"
+          else
+            echo "::error::cask $cask pins neither the literal final tag ${FINAL_TAG} nor ${interp_tag} in its download URL"
+            exit 1
+          fi
 
       - name: Upload dist
         if: ${{ !inputs.dry-run }}
