@@ -7,6 +7,7 @@
   - [Who We Are](#who-we-are)
 - [Where to Find It](#where-to-find-it)
 - [Software](#software)
+  - [`cr` - Code Review CLI](#cr---code-review-cli)
   - [`cfl` - Confluence CLI](#cfl---confluence-cli)
   - [`jtk` - Jira Ticket CLI](#jtk---jira-ticket-cli)
   - [`hspt` - HubSpot CLI](#hspt---hubspot-cli)
@@ -31,7 +32,8 @@ Anyone can join if they contribute well. That's it.
 
 # Where to Find It
 
-All CLIs are distributed through the same channels:
+Open CLI Collective tools are distributed through these channels as each tool
+implements packaging:
 
 | Platform | Method |
 |----------|--------|
@@ -41,6 +43,10 @@ All CLIs are distributed through the same channels:
 | **All** | Binary downloads from GitHub Releases, `go install` |
 
 # Software
+
+## [`cr`](https://github.com/open-cli-collective/codereview-cli) - Code Review CLI
+
+A command-line interface for automated pull-request review. Run dry-run or live GitHub reviews, orchestrate trusted LLM review agents, reuse named sessions, manage idempotent posting, and inspect or prune local review data.
 
 ## [`cfl`](https://github.com/open-cli-collective/atlassian-cli) - Confluence CLI
 
