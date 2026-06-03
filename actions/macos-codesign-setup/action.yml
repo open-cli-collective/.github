@@ -2,7 +2,7 @@ name: macOS code-signing setup
 description: >
   Import the family's self-signed code-signing cert and stage the per-build signing
   script for goreleaser's darwin hooks.post (cli-common distribution.md §2A). Self-gated:
-  a no-op unless all of cert-p12/cert-password/cert-cn are passed (all-or-none), so an
+  a no-op unless all four cert secrets are passed (all-or-none), so an
   opt-out or rolling-v1 caller that hasn't wired the secrets still releases unsigned and
   green. When enabled it exports SIGN_IDENTITY, TOOL_IDENTIFIER, CODESIGN_DARWIN_SCRIPT,
   and REQUIRE_SIGNING for the goreleaser build steps.
