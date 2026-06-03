@@ -12,6 +12,14 @@ inputs:
   keychain-probe:
     description: "the manifest's keychain_probe spec as JSON (from identity-json)"
     required: true
+  expected-leaf:
+    description: "pinned signing-cert leaf SHA-1 (MACOS_CERT_LEAF_SHA). Empty = skip the signature check (unsigned / opt-out caller)."
+    required: false
+    default: ""
+  identifier:
+    description: "expected code-signing identifier, e.g. org.open-cli-collective.<binary>"
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -21,6 +29,8 @@ runs:
         DIST: ${{ inputs.dist-path }}
         PROBE: ${{ inputs.keychain-probe }}
         ACTION_PATH: ${{ github.action_path }}
+        EXPECTED_LEAF: ${{ inputs.expected-leaf }}
+        IDENTIFIER: ${{ inputs.identifier }}
       run: |
         set -euo pipefail
         gate="$ACTION_PATH/darwin-gate.sh"
@@ -44,4 +54,13 @@ runs:
         #    Apple-Silicon runner), assert it selected the keychain backend.
         #    darwin-gate.sh probe takes the spec as a JSON string.
         bash "$gate" probe "$PROBE" "$arm"
+
+        # 5. code-signing designated-requirement check. Self-gated: runs only when a
+        #    pinned leaf is supplied (i.e. the caller passed the cert secrets). Skipped
+        #    otherwise so an opt-out / rolling-v1 caller's unsigned release still passes.
+        if [ -n "$EXPECTED_LEAF" ]; then
+          bash "$gate" check-signature "$arm" "$amd" "$EXPECTED_LEAF" "$IDENTIFIER"
+        else
+          echo "::notice::no expected-leaf — skipping code-signing check (unsigned release)"
+        fi
         echo "::notice::CGO-darwin gate passed"

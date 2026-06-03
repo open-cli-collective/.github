@@ -35,6 +35,16 @@ on:
         required: false
       linux-dispatch-token:
         required: false
+      # macOS code-signing (distribution.md §2A). All optional + all-or-none: pass all
+      # four to sign + enforce, or none to keep releasing unsigned during the v1 window.
+      macos-cert-p12:
+        required: false
+      macos-cert-password:
+        required: false
+      macos-cert-cn:
+        required: false
+      macos-cert-leaf-sha:
+        required: false
 
 # Least privilege: only the goreleaser job writes (it publishes the release via
 # the ambient GITHUB_TOKEN). Channels run as needs: jobs (not release:published
@@ -140,6 +150,18 @@ jobs:
         # force-move it to HEAD rather than failing and blocking recovery.
         run: git tag -f "${{ steps.meta.outputs.current-tag }}"
 
+      # macOS code-signing setup (distribution.md §2A). Unconditional; self-gates on the
+      # cert secrets (all-or-none) so an opt-out caller no-ops. MUST precede the snapshot
+      # build so both goreleaser runs inherit the exported SIGN_IDENTITY / CODESIGN_DARWIN_SCRIPT.
+      - name: macOS code-signing setup
+        uses: open-cli-collective/.github/actions/macos-codesign-setup@v1
+        with:
+          cert-p12: ${{ secrets.macos-cert-p12 }}
+          cert-password: ${{ secrets.macos-cert-password }}
+          cert-cn: ${{ secrets.macos-cert-cn }}
+          cert-leaf-sha: ${{ secrets.macos-cert-leaf-sha }}
+          binary: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
+
       - name: Build (snapshot, no publish)
         env:
           GORELEASER_CURRENT_TAG: ${{ steps.meta.outputs.current-tag }}
@@ -154,6 +176,9 @@ jobs:
         with:
           dist-path: dist
           keychain-probe: ${{ toJSON(fromJSON(steps.meta.outputs.identity-json).keychain_probe) }}
+          # self-gated inside darwin-gate: empty leaf (no cert secret) → signature check skipped
+          expected-leaf: ${{ secrets.macos-cert-leaf-sha }}
+          identifier: org.open-cli-collective.${{ fromJSON(steps.meta.outputs.identity-json).binary }}
 
       - name: Release (publish)
         if: ${{ !inputs.dry-run }}
