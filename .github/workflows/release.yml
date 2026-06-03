@@ -159,6 +159,7 @@ jobs:
           cert-p12: ${{ secrets.macos-cert-p12 }}
           cert-password: ${{ secrets.macos-cert-password }}
           cert-cn: ${{ secrets.macos-cert-cn }}
+          cert-leaf-sha: ${{ secrets.macos-cert-leaf-sha }}
           binary: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
 
       - name: Build (snapshot, no publish)

@@ -19,6 +19,10 @@ inputs:
     description: "cert Common Name = the codesign --sign identity (MACOS_CERT_CN)"
     required: false
     default: ""
+  cert-leaf-sha:
+    description: "pinned cert leaf SHA-1 (MACOS_CERT_LEAF_SHA). Consumed by darwin-gate; required here only so the all-or-none gate spans all four secrets (else a caller could sign but skip DR enforcement)."
+    required: false
+    default: ""
   binary:
     description: "binary short name (identity-json .binary); drives org.open-cli-collective.<binary>"
     required: false
@@ -38,20 +42,24 @@ runs:
         P12: ${{ inputs.cert-p12 }}
         PASSWORD: ${{ inputs.cert-password }}
         CN: ${{ inputs.cert-cn }}
+        LEAF_SHA: ${{ inputs.cert-leaf-sha }}
         BINARY: ${{ inputs.binary }}
       run: |
         set -euo pipefail
+        # All-or-none across ALL FOUR cert secrets — leaf-sha included so a caller can't
+        # sign here but then skip darwin-gate's DR check (which gates on leaf-sha).
         n=0
         [ -n "$P12" ] && n=$((n+1)) || true
         [ -n "$PASSWORD" ] && n=$((n+1)) || true
         [ -n "$CN" ] && n=$((n+1)) || true
+        [ -n "$LEAF_SHA" ] && n=$((n+1)) || true
         if [ "$n" -eq 0 ]; then
           echo "enabled=false" >> "$GITHUB_OUTPUT"
           echo "::notice::no macOS signing secrets passed — skipping code-signing setup (unsigned release)"
           exit 0
         fi
-        if [ "$n" -ne 3 ]; then
-          echo "::error::partial macOS signing config — pass all of cert-p12/cert-password/cert-cn, or none"; exit 1
+        if [ "$n" -ne 4 ]; then
+          echo "::error::partial macOS signing config — pass all four cert-p12/cert-password/cert-cn/cert-leaf-sha, or none"; exit 1
         fi
         [ -n "$BINARY" ] || { echo "::error::binary input is required when signing is enabled"; exit 1; }
         echo "enabled=true" >> "$GITHUB_OUTPUT"
