@@ -55,7 +55,7 @@ else
 fi
 SH
 chmod +x "$tmp/stub-native-seed"
-NSPEC='{"seed_config":{"base":"native_user_config","path":"x/config.yml","content":"credential_ref: x/default\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain",".backend_source":"auto",".credential_ref":"x/default"}}'
+NSPEC='{"env_unset":["X_KEYRING_BACKEND"],"seed_config":{"base":"native_user_config","path":"x/config.yml","content":"credential_ref: x/default\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain",".backend_source":"auto",".credential_ref":"x/default"}}'
 bash darwin-gate.sh probe "$NSPEC" "$tmp/stub-native-seed" >/dev/null 2>&1 && ok "probe native user config seed pass" || bad "probe native user config seed pass"
 
 TRAVERSAL_SPEC='{"seed_config":{"path":"../Library/Application Support/x/config.yml","content":"x\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain"}}'

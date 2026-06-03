@@ -107,10 +107,13 @@ def _validate_keychain_probe(m: dict) -> list[str]:
         )
 
     path = seed.get("path")
-    if path is None or path == "":
+    if path is None:
         return errors
     if not isinstance(path, str):
         errors.append("keychain_probe.seed_config.path must be a string")
+        return errors
+    if not path.strip():
+        errors.append("keychain_probe.seed_config.path must not be empty")
         return errors
 
     parsed = PurePosixPath(path)

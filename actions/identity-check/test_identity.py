@@ -110,6 +110,13 @@ def test_keychain_probe_seed_rejects_absolute_path(tmp_path):
     assert any("must be relative" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
+def test_keychain_probe_seed_rejects_blank_path(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"path": "   "}}
+    wd = build(tmp_path, manifest=m)
+    assert any("must not be empty" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
 def test_keychain_probe_seed_rejects_unknown_base(tmp_path):
     m = copy.deepcopy(BASE_MANIFEST)
     m["keychain_probe"] = {"seed_config": {"base": "home", "path": "slck/config.yml"}}
