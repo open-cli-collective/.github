@@ -125,6 +125,15 @@ jobs:
       - run: bash actions/darwin-gate/test_darwin_gate.sh
         shell: bash
 
+  # macos-codesign-setup portable half: the all-or-none gate (gate.sh). Cert import +
+  # codesign are macOS-only → exercised in a real signed release, not here.
+  macos-codesign-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash actions/macos-codesign-setup/test_gate.sh
+        shell: bash
+
   # homebrew alias-cask rendering (token rename, verbatim url/checksum copy).
   homebrew-alias:
     runs-on: ubuntu-latest

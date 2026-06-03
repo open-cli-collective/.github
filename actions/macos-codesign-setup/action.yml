@@ -44,25 +44,19 @@ runs:
         CN: ${{ inputs.cert-cn }}
         LEAF_SHA: ${{ inputs.cert-leaf-sha }}
         BINARY: ${{ inputs.binary }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        # All-or-none across ALL FOUR cert secrets — leaf-sha included so a caller can't
-        # sign here but then skip darwin-gate's DR check (which gates on leaf-sha).
-        n=0
-        [ -n "$P12" ] && n=$((n+1)) || true
-        [ -n "$PASSWORD" ] && n=$((n+1)) || true
-        [ -n "$CN" ] && n=$((n+1)) || true
-        [ -n "$LEAF_SHA" ] && n=$((n+1)) || true
-        if [ "$n" -eq 0 ]; then
+        # gate.sh (unit-tested) enforces all-or-none across all four cert secrets and
+        # prints enabled/disabled; a partial config exits non-zero (||exit 1) and fails
+        # the release rather than silently no-opping into an unsigned build.
+        out="$(bash "$ACTION_PATH/gate.sh")" || exit 1
+        if [ "$out" = enabled ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
           echo "enabled=false" >> "$GITHUB_OUTPUT"
           echo "::notice::no macOS signing secrets passed — skipping code-signing setup (unsigned release)"
-          exit 0
         fi
-        if [ "$n" -ne 4 ]; then
-          echo "::error::partial macOS signing config — pass all four cert-p12/cert-password/cert-cn/cert-leaf-sha, or none"; exit 1
-        fi
-        [ -n "$BINARY" ] || { echo "::error::binary input is required when signing is enabled"; exit 1; }
-        echo "enabled=true" >> "$GITHUB_OUTPUT"
 
     - if: steps.gate.outputs.enabled == 'true'
       uses: apple-actions/import-codesign-certs@v6

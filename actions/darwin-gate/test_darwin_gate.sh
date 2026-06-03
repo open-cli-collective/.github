@@ -118,5 +118,13 @@ printf 'designated => identifier "%s" and certificate leaf = H"%s"\n' "org.open-
 printf 'Identifier=org.open-cli-collective.slck\nAuthority=Open CLI Code Signing\n' \
   | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && bad "assert-dr missing requirement should fail" || ok "assert-dr missing requirement fails"
 
+# multiple designated => lines → the first (valid) wins; a trailing bad line is ignored
+printf 'designated => identifier "%s" and certificate leaf = H"%s"\ndesignated => cdhash H"%s"\n' "$IDENT" "$LEAF" "$LEAF" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && ok "assert-dr uses first designated line" || bad "assert-dr uses first designated line"
+
+# empty identifier arg → must fail (not vacuously matched)
+printf 'designated => identifier "%s" and certificate leaf = H"%s"\n' "$IDENT" "$LEAF" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "" >/dev/null 2>&1 && bad "assert-dr empty identifier should fail" || ok "assert-dr empty identifier fails"
+
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "all darwin-gate tests passed"; else echo "$fails failed"; exit 1; fi
