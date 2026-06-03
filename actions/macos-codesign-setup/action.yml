@@ -1,0 +1,84 @@
+name: macOS code-signing setup
+description: >
+  Import the family's self-signed code-signing cert and stage the per-build signing
+  script for goreleaser's darwin hooks.post (cli-common distribution.md §2A). Self-gated:
+  a no-op unless all of cert-p12/cert-password/cert-cn are passed (all-or-none), so an
+  opt-out or rolling-v1 caller that hasn't wired the secrets still releases unsigned and
+  green. When enabled it exports SIGN_IDENTITY, TOOL_IDENTIFIER, CODESIGN_DARWIN_SCRIPT,
+  and REQUIRE_SIGNING for the goreleaser build steps.
+inputs:
+  cert-p12:
+    description: "base64 of the code-signing .p12 (MACOS_CERT_P12)"
+    required: false
+    default: ""
+  cert-password:
+    description: "the .p12 password (MACOS_CERT_PASSWORD)"
+    required: false
+    default: ""
+  cert-cn:
+    description: "cert Common Name = the codesign --sign identity (MACOS_CERT_CN)"
+    required: false
+    default: ""
+  binary:
+    description: "binary short name (identity-json .binary); drives org.open-cli-collective.<binary>"
+    required: false
+    default: ""
+outputs:
+  enabled:
+    description: "true when signing is active (all cert secrets present)"
+    value: ${{ steps.gate.outputs.enabled }}
+runs:
+  using: composite
+  steps:
+    # all-or-none gate (secrets.* can't be used in if:, so we gate inside the action on
+    # its inputs and emit a non-secret `enabled` output for downstream steps).
+    - id: gate
+      shell: bash
+      env:
+        P12: ${{ inputs.cert-p12 }}
+        PASSWORD: ${{ inputs.cert-password }}
+        CN: ${{ inputs.cert-cn }}
+        BINARY: ${{ inputs.binary }}
+      run: |
+        set -euo pipefail
+        n=0
+        [ -n "$P12" ] && n=$((n+1)) || true
+        [ -n "$PASSWORD" ] && n=$((n+1)) || true
+        [ -n "$CN" ] && n=$((n+1)) || true
+        if [ "$n" -eq 0 ]; then
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::no macOS signing secrets passed — skipping code-signing setup (unsigned release)"
+          exit 0
+        fi
+        if [ "$n" -ne 3 ]; then
+          echo "::error::partial macOS signing config — pass all of cert-p12/cert-password/cert-cn, or none"; exit 1
+        fi
+        [ -n "$BINARY" ] || { echo "::error::binary input is required when signing is enabled"; exit 1; }
+        echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+    - if: steps.gate.outputs.enabled == 'true'
+      uses: apple-actions/import-codesign-certs@v6
+      with:
+        p12-file-base64: ${{ inputs.cert-p12 }}
+        p12-password: ${{ inputs.cert-password }}
+
+    - if: steps.gate.outputs.enabled == 'true'
+      shell: bash
+      env:
+        CN: ${{ inputs.cert-cn }}
+        BINARY: ${{ inputs.binary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # Stage the signing script OUTSIDE the repo checkout ($RUNNER_TEMP) so it can't
+        # dirty goreleaser's git-state check, and export its absolute path (the goreleaser
+        # hook's CWD is the build dir:, e.g. tools/cfl, so a relative path would miss).
+        script="$RUNNER_TEMP/codesign-darwin.sh"
+        install -m 0755 "$ACTION_PATH/codesign-darwin.sh" "$script"
+        {
+          echo "SIGN_IDENTITY=$CN"
+          echo "TOOL_IDENTIFIER=org.open-cli-collective.$BINARY"
+          echo "CODESIGN_DARWIN_SCRIPT=$script"
+          echo "REQUIRE_SIGNING=1"
+        } >> "$GITHUB_ENV"
+        echo "::notice::code-signing enabled — identity '$CN', identifier org.open-cli-collective.$BINARY"

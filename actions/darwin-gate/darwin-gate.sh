@@ -8,6 +8,10 @@
 #       Mach-O arch sanity + amd64 linked against Security.framework.
 #   darwin-gate.sh probe <keychain-probe-json> <arm64-bin>
 #       manifest-driven functional probe: seed config, run, assert backend.
+#   darwin-gate.sh assert-dr <expected-leaf> <identifier>   (codesign -d -r- on stdin)
+#       pure: designated requirement pins our cert leaf + identifier, no cdhash.
+#   darwin-gate.sh check-signature <arm64-bin> <amd64-bin> <expected-leaf> <identifier>  (macOS only)
+#       per binary: codesign --verify --strict, then assert-dr on its requirement.
 #
 # check-artifacts and probe are pure/portable (unit-tested on Linux with
 # fixtures and a stub binary); check-macho needs the macOS toolchain and runs
@@ -109,9 +113,39 @@ probe() {
   echo "probe OK"
 }
 
+# assert-dr — pure/portable: read full `codesign -d -r-` output on stdin, extract the
+# `designated => ` requirement line, and assert it pins our cert leaf + identifier and
+# NOT a cdhash. Parsing ONLY the requirement line is deliberate — a valid signature's
+# verbose output also prints `CDHash=` metadata, which is not the requirement keyword
+# `cdhash`. Leaf match is case-insensitive (codesign may emit the hash in either case).
+assert_dr() {
+  local leaf="$1" ident="$2" req lreq lleaf
+  req="$(cat | sed -n 's/^designated => //p' | head -1)"
+  [ -n "$req" ] || { echo "::error::no 'designated =>' requirement in codesign output"; return 1; }
+  case "$req" in *cdhash*) echo "::error::DR pins cdhash (ad-hoc) — Keychain grant will not persist"; return 1 ;; esac
+  lreq="$(printf '%s' "$req" | tr 'A-Z' 'a-z')"; lleaf="$(printf '%s' "$leaf" | tr 'A-Z' 'a-z')"
+  case "$lreq" in *"certificate leaf = h\"$lleaf\""*) : ;; *) echo "::error::DR leaf != expected $leaf; got: $req"; return 1 ;; esac
+  case "$req"  in *"identifier \"$ident\""*) : ;; *) echo "::error::DR identifier != $ident; got: $req"; return 1 ;; esac
+  echo "assert-dr OK"
+}
+
+# check-signature (macOS only) — per darwin binary: verify the seal, then assert the DR
+# via assert-dr. The release.yml step passes the pinned leaf only when the cert secrets
+# exist, so this runs solely for signed (opted-in) releases.
+check_signature() {
+  local arm="$1" amd="$2" leaf="$3" ident="$4" bin
+  for bin in "$arm" "$amd"; do
+    codesign --verify --strict "$bin" 2>/dev/null || { echo "::error::codesign --verify --strict failed: $bin"; return 1; }
+    codesign -d -r- "$bin" 2>&1 | assert_dr "$leaf" "$ident" || { echo "::error::DR check failed: $bin"; return 1; }
+  done
+  echo "check-signature OK"
+}
+
 case "${1:-}" in
   check-artifacts) check_artifacts "$2" ;;
   check-macho)     check_macho "$2" "$3" ;;
   probe)           probe "$2" "$3" ;;
-  *) echo "usage: darwin-gate.sh {check-artifacts|check-macho|probe} ..." >&2; exit 2 ;;
+  assert-dr)       assert_dr "$2" "$3" ;;
+  check-signature) check_signature "$2" "$3" "$4" "$5" ;;
+  *) echo "usage: darwin-gate.sh {check-artifacts|check-macho|probe|assert-dr|check-signature} ..." >&2; exit 2 ;;
 esac

@@ -84,5 +84,39 @@ chmod +x "$tmp/stub-text"
 TSPEC='{"command":["config","show"],"output":"text","match":["backend:\\s*keychain","source:\\s*auto"]}'
 bash darwin-gate.sh probe "$TSPEC" "$tmp/stub-text" >/dev/null 2>&1 && ok "probe text pass" || bad "probe text pass"
 
+# --- assert-dr (pure DR assertion; codesign -d -r- output on stdin) ---
+LEAF=42e1afd02aae8666c09c15f171e1639550f301c2
+IDENT=org.open-cli-collective.slck
+
+# valid: requirement pins our leaf + identifier; the CDHash= metadata line must be ignored
+cat <<DR | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && ok "assert-dr valid (ignores CDHash= metadata)" || bad "assert-dr valid"
+Executable=/x/slck
+Identifier=org.open-cli-collective.slck
+CodeDirectory v=20400 size=245 flags=0x0(none) hashes=2+2 location=embedded
+CDHash=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+Authority=Open CLI Code Signing
+designated => identifier "org.open-cli-collective.slck" and certificate leaf = H"$LEAF"
+DR
+
+# uppercase leaf in the requirement vs lowercase expected → case-insensitive match
+printf 'designated => identifier "%s" and certificate leaf = H"%s"\n' "$IDENT" "42E1AFD02AAE8666C09C15F171E1639550F301C2" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && ok "assert-dr case-insensitive leaf" || bad "assert-dr case-insensitive leaf"
+
+# ad-hoc (requirement pins cdhash) → must fail
+printf 'designated => cdhash H"%s"\n' "$LEAF" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && bad "assert-dr ad-hoc cdhash should fail" || ok "assert-dr ad-hoc cdhash fails"
+
+# wrong leaf hash → must fail
+printf 'designated => identifier "%s" and certificate leaf = H"%s"\n' "$IDENT" "ffffffffffffffffffffffffffffffffffffffff" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && bad "assert-dr wrong leaf should fail" || ok "assert-dr wrong leaf fails"
+
+# wrong identifier → must fail
+printf 'designated => identifier "%s" and certificate leaf = H"%s"\n' "org.open-cli-collective.evil" "$LEAF" \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && bad "assert-dr wrong identifier should fail" || ok "assert-dr wrong identifier fails"
+
+# no designated => line → must fail
+printf 'Identifier=org.open-cli-collective.slck\nAuthority=Open CLI Code Signing\n' \
+  | bash darwin-gate.sh assert-dr "$LEAF" "$IDENT" >/dev/null 2>&1 && bad "assert-dr missing requirement should fail" || ok "assert-dr missing requirement fails"
+
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "all darwin-gate tests passed"; else echo "$fails failed"; exit 1; fi
