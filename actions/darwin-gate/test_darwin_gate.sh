@@ -36,7 +36,11 @@ bash darwin-gate.sh check-artifacts "$tmp/missing.json" >/dev/null 2>&1 && bad "
 # --- probe (json) with a stub binary ---
 cat > "$tmp/stub-good" <<'SH'
 #!/usr/bin/env bash
-echo '{"backend":"keychain","backend_source":"auto","credential_ref":"x/default"}'
+if grep -Fxq "credential_ref: x/default" "$XDG_CONFIG_HOME/x/config.yml" 2>/dev/null; then
+  echo '{"backend":"keychain","backend_source":"auto","credential_ref":"x/default"}'
+else
+  echo '{"backend":"file","backend_source":"missing-seed","credential_ref":"x/default"}'
+fi
 SH
 chmod +x "$tmp/stub-good"
 SPEC='{"env_unset":["X_KEYRING_BACKEND"],"seed_config":{"path":"x/config.yml","content":"credential_ref: x/default\n"},"command":["--output","json","config","show"],"output":"json","assertions":{".backend":"keychain",".backend_source":"auto",".credential_ref":"x/default"}}'
@@ -44,7 +48,7 @@ bash darwin-gate.sh probe "$SPEC" "$tmp/stub-good" >/dev/null 2>&1 && ok "probe 
 
 cat > "$tmp/stub-native-seed" <<'SH'
 #!/usr/bin/env bash
-if [ -f "$HOME/Library/Application Support/x/config.yml" ]; then
+if grep -Fxq "credential_ref: x/default" "$HOME/Library/Application Support/x/config.yml" 2>/dev/null; then
   echo '{"backend":"keychain","backend_source":"auto","credential_ref":"x/default"}'
 else
   echo '{"backend":"file","backend_source":"missing-seed","credential_ref":"x/default"}'
@@ -59,6 +63,9 @@ bash darwin-gate.sh probe "$TRAVERSAL_SPEC" "$tmp/stub-good" >/dev/null 2>&1 && 
 
 NESTED_TRAVERSAL_SPEC='{"seed_config":{"path":"x/../config.yml","content":"x\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain"}}'
 bash darwin-gate.sh probe "$NESTED_TRAVERSAL_SPEC" "$tmp/stub-good" >/dev/null 2>&1 && bad "probe nested traversal should fail" || ok "probe nested traversal fails"
+
+ABSOLUTE_SPEC='{"seed_config":{"path":"/tmp/x/config.yml","content":"x\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain"}}'
+bash darwin-gate.sh probe "$ABSOLUTE_SPEC" "$tmp/stub-good" >/dev/null 2>&1 && bad "probe absolute path should fail" || ok "probe absolute path fails"
 
 cat > "$tmp/stub-bad" <<'SH'
 #!/usr/bin/env bash
