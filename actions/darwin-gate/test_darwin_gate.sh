@@ -42,6 +42,24 @@ chmod +x "$tmp/stub-good"
 SPEC='{"env_unset":["X_KEYRING_BACKEND"],"seed_config":{"path":"x/config.yml","content":"credential_ref: x/default\n"},"command":["--output","json","config","show"],"output":"json","assertions":{".backend":"keychain",".backend_source":"auto",".credential_ref":"x/default"}}'
 bash darwin-gate.sh probe "$SPEC" "$tmp/stub-good" >/dev/null 2>&1 && ok "probe json pass" || bad "probe json pass"
 
+cat > "$tmp/stub-native-seed" <<'SH'
+#!/usr/bin/env bash
+if [ -f "$HOME/Library/Application Support/x/config.yml" ]; then
+  echo '{"backend":"keychain","backend_source":"auto","credential_ref":"x/default"}'
+else
+  echo '{"backend":"file","backend_source":"missing-seed","credential_ref":"x/default"}'
+fi
+SH
+chmod +x "$tmp/stub-native-seed"
+NSPEC='{"seed_config":{"base":"native_user_config","path":"x/config.yml","content":"credential_ref: x/default\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain",".backend_source":"auto",".credential_ref":"x/default"}}'
+bash darwin-gate.sh probe "$NSPEC" "$tmp/stub-native-seed" >/dev/null 2>&1 && ok "probe native user config seed pass" || bad "probe native user config seed pass"
+
+TRAVERSAL_SPEC='{"seed_config":{"path":"../Library/Application Support/x/config.yml","content":"x\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain"}}'
+bash darwin-gate.sh probe "$TRAVERSAL_SPEC" "$tmp/stub-good" >/dev/null 2>&1 && bad "probe traversal should fail" || ok "probe traversal fails"
+
+NESTED_TRAVERSAL_SPEC='{"seed_config":{"path":"x/../config.yml","content":"x\n"},"command":["config","show","--json"],"output":"json","assertions":{".backend":"keychain"}}'
+bash darwin-gate.sh probe "$NESTED_TRAVERSAL_SPEC" "$tmp/stub-good" >/dev/null 2>&1 && bad "probe nested traversal should fail" || ok "probe nested traversal fails"
+
 cat > "$tmp/stub-bad" <<'SH'
 #!/usr/bin/env bash
 echo '{"backend":"file","backend_source":"config","credential_ref":"x/default"}'
