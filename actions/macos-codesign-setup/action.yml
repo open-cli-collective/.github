@@ -47,19 +47,25 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        # gate.sh (unit-tested) enforces all-or-none across all four cert secrets and
-        # prints enabled/disabled; a partial config exits non-zero (||exit 1) and fails
-        # the release rather than silently no-opping into an unsigned build.
-        out="$(bash "$ACTION_PATH/gate.sh")" || exit 1
-        if [ "$out" = enabled ]; then
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "enabled=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::no macOS signing secrets passed — skipping code-signing setup (unsigned release)"
-        fi
+        # gate.sh (unit-tested) enforces all-or-none across all four cert secrets and signals
+        # via exit code (0 enabled / 10 disabled / 1 invalid). Its stdout is NOT captured so
+        # its ::error:: annotation renders; a partial config (exit 1) fails the release.
+        rc=0; bash "$ACTION_PATH/gate.sh" || rc=$?
+        case "$rc" in
+          0)
+            [ "${RUNNER_OS:-}" = macOS ] || { echo "::error::macOS code-signing is enabled but the runner is ${RUNNER_OS:-unknown}; it requires a macOS runner"; exit 1; }
+            echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+          10)
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no macOS signing secrets passed — skipping code-signing setup (unsigned release)" ;;
+          *)
+            exit "$rc" ;;
+        esac
 
     - if: steps.gate.outputs.enabled == 'true'
-      uses: apple-actions/import-codesign-certs@v6
+      # SHA-pinned (not a floating @v6): this action receives the raw .p12 + password, so a
+      # moved tag would mean silent signing-key exfiltration. Bump deliberately on upgrade.
+      uses: apple-actions/import-codesign-certs@fe74d46e82474f87e1ba79832ad28a4013d0e33a # v6.1.0
       with:
         p12-file-base64: ${{ inputs.cert-p12 }}
         p12-password: ${{ inputs.cert-password }}

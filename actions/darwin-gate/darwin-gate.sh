@@ -135,7 +135,7 @@ assert_dr() {
 check_signature() {
   local arm="$1" amd="$2" leaf="$3" ident="$4" bin
   for bin in "$arm" "$amd"; do
-    codesign --verify --strict "$bin" 2>/dev/null || { echo "::error::codesign --verify --strict failed: $bin"; return 1; }
+    codesign --verify --strict "$bin" || { echo "::error::codesign --verify --strict failed: $bin (see codesign output above)"; return 1; }
     codesign -d -r- "$bin" 2>&1 | assert_dr "$leaf" "$ident" || { echo "::error::DR check failed: $bin"; return 1; }
   done
   echo "check-signature OK"
