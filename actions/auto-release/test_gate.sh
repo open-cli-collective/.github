@@ -36,6 +36,28 @@ mp_pass "shared go"          "$REL" "$TOOL" version.txt "shared/util.go"
 mp_fail "other tool"         "$REL" "$TOOL" version.txt "tools/jtk/main.go"
 mp_fail "root doc in mono"   "$REL" "$TOOL" version.txt "README.md"
 
+# --- regression (.github#25): the gate must not depend on its CWD. In CI the
+# gate runs from the repo *root*, where tool-paths like `tools/cfl/**` name real
+# directories. An unquoted glob in _split_csv pathname-expanded them into
+# directory entries, so EVERY change to a monorepo tool was skipped. Re-run the
+# monorepo cases from inside such a tree to lock the behavior. ---
+GATE="$(pwd)/gate.sh"
+fixture="$(mktemp -d)"
+mkdir -p "$fixture/tools/cfl/internal" "$fixture/tools/cfl/cmd/cfl" "$fixture/shared"
+: > "$fixture/tools/cfl/version.txt"; : > "$fixture/tools/cfl/go.mod"
+mp_pass_at() { # label cwd release tool vfile files
+  if ( cd "$2" && printf '%s\n' "$6" | bash "$GATE" match-paths "$3" "$4" "$5" ); then ok "$1"; else bad "$1"; fi
+}
+mp_fail_at() {
+  if ( cd "$2" && printf '%s\n' "$6" | bash "$GATE" match-paths "$3" "$4" "$5" ); then bad "$1"; else ok "$1"; fi
+}
+mp_pass_at "from root: cfl version bump" "$fixture" "$REL" "$TOOL" version.txt "tools/cfl/version.txt"
+mp_pass_at "from root: cfl go file"      "$fixture" "$REL" "$TOOL" version.txt "tools/cfl/internal/foo.go"
+mp_pass_at "from root: cfl go.mod"       "$fixture" "$REL" "$TOOL" version.txt "tools/cfl/go.mod"
+mp_fail_at "from root: other tool"       "$fixture" "$REL" "$TOOL" version.txt "tools/jtk/main.go"
+mp_fail_at "from root: tool doc only"    "$fixture" "$REL" "$TOOL" version.txt "tools/cfl/README.md"
+rm -rf "$fixture"
+
 # --- version validation ---
 bash gate.sh validate-version "3.1"   >/dev/null 2>&1 && ok "ver 3.1"        || bad "ver 3.1"
 bash gate.sh validate-version "v3.1"  >/dev/null 2>&1 && bad "reject v3.1"   || ok "reject v3.1"

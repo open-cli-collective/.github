@@ -8,8 +8,19 @@
 #       exit 0 if any changed file is release-worthy, 1 otherwise
 set -euo pipefail
 
-# Split a comma-separated list into lines, dropping empties.
-_split_csv() { local IFS=','; for x in $1; do [ -n "$x" ] && printf '%s\n' "$x"; done; }
+# Split a comma-separated list into lines, dropping empties. Globbing MUST be
+# off while splitting: the values are path *globs* (e.g. tools/cfl/**), and an
+# unquoted `for x in $1` would pathname-expand them against the gate's CWD — so
+# run from a repo root, tools/cfl/** would match real directory entries and
+# silently corrupt the gate (.github#25). Disable globbing for the split and
+# restore the caller's prior setting.
+_split_csv() {
+  local IFS=',' x restore=0
+  case $- in *f*) ;; *) set -f; restore=1 ;; esac
+  for x in $1; do [ -n "$x" ] && printf '%s\n' "$x"; done
+  [ "$restore" -eq 1 ] && set +f
+  return 0
+}
 
 # Translate a path glob into a bash `case` pattern: ** -> * (case patterns
 # already match across '/', so a single * suffices for "any depth").
