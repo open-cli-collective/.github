@@ -73,6 +73,57 @@ def test_pass(tmp_path):
     assert identity.validate(manifest_path(wd), wd, wd) == []
 
 
+def test_keychain_probe_native_user_config_seed_passes(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {
+        "seed_config": {
+            "base": "native_user_config",
+            "path": "slck/config.yml",
+            "content": "default_profile: default\n",
+        },
+        "command": ["config", "show", "--json"],
+        "output": "json",
+        "assertions": {".backend": "keychain", ".backend_source": "auto"},
+    }
+    wd = build(tmp_path, manifest=m)
+    assert identity.validate(manifest_path(wd), wd, wd) == []
+
+
+def test_keychain_probe_seed_rejects_traversal(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"path": "../Library/Application Support/slck/config.yml"}}
+    wd = build(tmp_path, manifest=m)
+    assert any("must not contain '..'" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
+def test_keychain_probe_seed_rejects_nested_traversal(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"path": "slck/../config.yml"}}
+    wd = build(tmp_path, manifest=m)
+    assert any("must not contain '..'" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
+def test_keychain_probe_seed_rejects_absolute_path(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"path": "/tmp/slck/config.yml"}}
+    wd = build(tmp_path, manifest=m)
+    assert any("must be relative" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
+def test_keychain_probe_seed_rejects_blank_path(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"path": "   "}}
+    wd = build(tmp_path, manifest=m)
+    assert any("must not be empty" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
+def test_keychain_probe_seed_rejects_unknown_base(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["keychain_probe"] = {"seed_config": {"base": "home", "path": "slck/config.yml"}}
+    wd = build(tmp_path, manifest=m)
+    assert any("seed_config.base" in e for e in identity.validate(manifest_path(wd), wd, wd))
+
+
 def test_drift_binary(tmp_path):
     g = copy.deepcopy(BASE_GORELEASER)
     g["builds"][0]["binary"] = "wrong"

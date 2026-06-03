@@ -22,6 +22,7 @@ import glob
 import json
 import os
 import sys
+from pathlib import PurePosixPath
 
 import defusedxml.ElementTree as ET  # hardened against XXE / billion-laughs
 import yaml
@@ -82,6 +83,45 @@ def normalize(m: dict) -> dict:
         },
         "keychain_probe": m.get("keychain_probe"),
     }
+
+
+def _validate_keychain_probe(m: dict) -> list[str]:
+    errors: list[str] = []
+    probe = m.get("keychain_probe")
+    if probe is None:
+        return errors
+    if not isinstance(probe, dict):
+        return ["keychain_probe must be a mapping"]
+
+    seed = probe.get("seed_config")
+    if seed is None:
+        return errors
+    if not isinstance(seed, dict):
+        return ["keychain_probe.seed_config must be a mapping"]
+
+    base = seed.get("base", "xdg_config")
+    if base not in ("xdg_config", "native_user_config"):
+        errors.append(
+            "keychain_probe.seed_config.base must be one of "
+            "'xdg_config' or 'native_user_config'"
+        )
+
+    path = seed.get("path")
+    if path is None:
+        return errors
+    if not isinstance(path, str):
+        errors.append("keychain_probe.seed_config.path must be a string")
+        return errors
+    if not path.strip():
+        errors.append("keychain_probe.seed_config.path must not be empty")
+        return errors
+
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute():
+        errors.append("keychain_probe.seed_config.path must be relative")
+    if ".." in parsed.parts:
+        errors.append("keychain_probe.seed_config.path must not contain '..'")
+    return errors
 
 
 def _nuspec_id(path: str) -> str | None:
@@ -147,6 +187,8 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
                     errors.append(f"goreleaser archive name_template '{got}' != manifest '{want_tmpl}'")
 
     pkgs = m.get("packages", {}) or {}
+
+    errors.extend(_validate_keychain_probe(m))
 
     # --- linux nfpm + homebrew cask (declared-channel; both read .goreleaser) ---
     # alias_casks are intentionally NOT checked here: they live only in the

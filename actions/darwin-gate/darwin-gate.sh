@@ -57,11 +57,26 @@ probe() {
   local xdg="$tmp/xdg"; mkdir -p "$xdg"
 
   # seed a hermetic config so auto-detect (not an override) selects the backend
-  local seed_path
+  local seed_path seed_base seed_root
   seed_path=$(printf '%s' "$spec" | jq -r '.seed_config.path // empty')
+  seed_base=$(printf '%s' "$spec" | jq -r '.seed_config.base // "xdg_config"')
   if [ -n "$seed_path" ]; then
-    mkdir -p "$xdg/$(dirname "$seed_path")"
-    printf '%s' "$spec" | jq -r '.seed_config.content // ""' > "$xdg/$seed_path"
+    case "$seed_base" in
+      xdg_config) seed_root="$xdg" ;;
+      native_user_config) seed_root="$tmp/Library/Application Support" ;;
+      *) echo "::error::unsupported seed_config.base '$seed_base'"; return 1 ;;
+    esac
+    case "$seed_path" in
+      /*) echo "::error::seed_config.path must be relative: $seed_path"; return 1 ;;
+    esac
+    local -a seed_parts=()
+    local part
+    IFS='/' read -r -a seed_parts <<< "$seed_path"
+    for part in "${seed_parts[@]}"; do
+      [ "$part" != ".." ] || { echo "::error::seed_config.path must not contain '..': $seed_path"; return 1; }
+    done
+    mkdir -p "$seed_root/$(dirname "$seed_path")"
+    printf '%s' "$spec" | jq -r '.seed_config.content // ""' > "$seed_root/$seed_path"
   fi
 
   # build the env -u list + the command argv
