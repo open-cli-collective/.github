@@ -6,12 +6,13 @@ import argparse
 import os
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+
+from defusedxml import ElementTree as ET
 
 HTTP_TIMEOUT_SECONDS = 30
 CHOCO_SOURCE = "https://push.chocolatey.org/"
@@ -132,7 +133,7 @@ def probe_package_state(package_id: str, http_get=None) -> PackageState:
     if package_response.status != 200:
         raise ProbeError(f"Chocolatey package endpoint returned HTTP {package_response.status}")
 
-    query = urlencode({"$filter": f"Id eq '{package_id}'", "$orderby": "Version desc"})
+    query = urlencode({"$filter": f"Id eq '{_odata_string(package_id)}'", "$orderby": "Version desc"})
     feed_response = http_get(f"{COMMUNITY_API}/Packages()?{query}")
     if feed_response.status != 200:
         raise ProbeError(f"Chocolatey package listing returned HTTP {feed_response.status}")
@@ -163,6 +164,10 @@ def _parse_atom_entries(body: str) -> int:
 
 def _looks_like_forbidden(output: str) -> bool:
     return "403" in output and "Forbidden" in output
+
+
+def _odata_string(value: str) -> str:
+    return value.replace("'", "''")
 
 
 def _looks_like_credential_or_owner_failure(output: str) -> bool:

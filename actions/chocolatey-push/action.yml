@@ -20,8 +20,11 @@ runs:
     - shell: bash
       env:
         CHOCO_API_KEY: ${{ inputs.api-key }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
+        python -m pip install "defusedxml==0.7.1"
         python "$GITHUB_ACTION_PATH/chocolatey_push.py" push \
-          --package-id "${{ inputs.package-id }}" \
-          --working-directory "${{ inputs.working-directory }}" \
+          --package-id "$PACKAGE_ID" \
+          --working-directory "$WORKING_DIRECTORY" \
           --api-key-env CHOCO_API_KEY

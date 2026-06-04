@@ -99,17 +99,35 @@ def test_non_forbidden_push_failure_fails_release(tmp_path):
 
 def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
     summary = tmp_path / "summary.md"
+    work = _working_dir(tmp_path)
+    choco_dir = work / "packaging" / "chocolatey"
+    calls = []
 
     rc = chocolatey_push.pack_and_push(
         package_id="codereview-cli",
-        working_dir=_working_dir(tmp_path),
+        working_dir=work,
         api_key="key",
-        command_runner=_forbidden_push_runner(tmp_path),
+        command_runner=_forbidden_push_runner(tmp_path, calls=calls),
         http_get=_http_get({"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, EMPTY_FEED)}),
         summary_path=str(summary),
     )
 
     assert rc == 0
+    assert calls == [
+        (["choco", "pack"], choco_dir),
+        (
+            [
+                "choco",
+                "push",
+                "codereview-cli.1.0.0.nupkg",
+                "--source",
+                "https://push.chocolatey.org/",
+                "--key",
+                "key",
+            ],
+            choco_dir,
+        ),
+    ]
     assert "was not accepted for this release" in summary.read_text()
 
 
@@ -117,8 +135,12 @@ def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
     "stderr",
     [
         "403 (Forbidden): Invalid API Key",
+        "403 (Forbidden): invalid apikey",
+        "403 (Forbidden): API key is invalid",
         "403 (Forbidden): unauthorized",
+        "403 (Forbidden): not authorized to push package codereview-cli",
         "403 (Forbidden): package is not owned by this user",
+        "403 (Forbidden): not owned by this account",
         "403 (Forbidden): not the owner of package codereview-cli",
         "403 (Forbidden): package owner mismatch",
     ],
@@ -207,6 +229,21 @@ def test_probe_package_state_builds_expected_urls():
     assert "%24filter=Id+eq+%27codereview-cli%27" in seen[1]
 
 
+def test_probe_package_state_escapes_odata_string_quotes():
+    seen = []
+
+    def http_get(url):
+        seen.append(url)
+        if "/package/code%27review-cli" in url:
+            return chocolatey_push.HttpResponse(200, "nupkg")
+        return chocolatey_push.HttpResponse(200, EMPTY_FEED)
+
+    state = chocolatey_push.probe_package_state("code'review-cli", http_get=http_get)
+
+    assert state.pending_first_submission is True
+    assert "%24filter=Id+eq+%27code%27%27review-cli%27" in seen[1]
+
+
 def test_request_text_transport_failure_fails_closed(monkeypatch):
     def fail(request, timeout):
         raise URLError("network down")
@@ -226,8 +263,11 @@ def _working_dir(tmp_path):
 def _forbidden_push_runner(
     tmp_path,
     stderr="Response status code does not indicate success: 403 (Forbidden).",
+    calls=None,
 ):
     def runner(command, cwd, text, capture_output):
+        if calls is not None:
+            calls.append((command, cwd))
         if command == ["choco", "pack"]:
             (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
             return _result(0, stdout="packed\n")
