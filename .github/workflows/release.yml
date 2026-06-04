@@ -349,29 +349,16 @@ jobs:
       WINGET_ID: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.id }}
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve windows asset URLs from the release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh release download "$env:FINAL_TAG" --pattern "checksums.txt" --dir .
-          $checksums = Get-Content checksums.txt
-          $x64Name = ($checksums | Select-String "windows_amd64.zip").Line.Split()[-1]
-          $arm64Name = ($checksums | Select-String "windows_arm64.zip").Line.Split()[-1]
-          if (-not $x64Name) { Write-Error "no windows_amd64.zip entry in checksums.txt"; exit 1 }
-          if (-not $arm64Name) { Write-Error "no windows_arm64.zip entry in checksums.txt"; exit 1 }
-          $base = "https://github.com/$env:REPO/releases/download/$env:FINAL_TAG"
-          echo "X64_URL=$base/$x64Name" >> $env:GITHUB_ENV
-          echo "ARM64_URL=$base/$arm64Name" >> $env:GITHUB_ENV
-      - name: Submit to winget
-        shell: pwsh
-        env:
-          WINGET_TOKEN: ${{ secrets.winget-token }}
-        run: |
-          if (-not $env:WINGET_TOKEN) { Write-Error "winget-token not set"; exit 1 }
-          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-          ./wingetcreate.exe update $env:WINGET_ID --version $env:VERSION --urls $env:X64_URL $env:ARM64_URL --submit --token $env:WINGET_TOKEN
+      - uses: open-cli-collective/.github/actions/winget-submit@v1
+        with:
+          package-id: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.id }}
+          version: ${{ needs.goreleaser.outputs.version }}
+          final-tag: ${{ needs.goreleaser.outputs.final-tag }}
+          repo: ${{ github.repository }}
+          working-directory: ${{ inputs.working-directory }}
+          bootstrap: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.bootstrap }}
+          github-token: ${{ github.token }}
+          winget-token: ${{ secrets.winget-token }}
       # Surface ANY failure (missing token, asset resolution, wingetcreate) — a
       # continue-on-error job would otherwise go green with no trace.
       - name: Note winget failure
