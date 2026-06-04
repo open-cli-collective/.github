@@ -152,7 +152,16 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
     )
 
     assert installer_path.read_text() == original_installer
+    assert {path.name for path in output_paths} == {
+        f"{package_id}.yaml",
+        f"{package_id}.locale.en-US.yaml",
+        f"{package_id}.installer.yaml",
+    }
     assert all(pathlib.Path(path).is_relative_to(rendered) for path in output_paths)
+    rendered_version = yaml.safe_load((rendered / f"{package_id}.yaml").read_text())
+    rendered_locale = yaml.safe_load((rendered / f"{package_id}.locale.en-US.yaml").read_text())
+    assert rendered_version["PackageVersion"] == "1.2.3"
+    assert rendered_locale["PackageVersion"] == "1.2.3"
     rendered_installer = yaml.safe_load((rendered / f"{package_id}.installer.yaml").read_text())
     assert rendered_installer["PackageVersion"] == "1.2.3"
     installers = {item["Architecture"]: item for item in rendered_installer["Installers"]}
@@ -217,6 +226,7 @@ def test_run_submit_existing_package_uses_update_command_and_token_contexts(monk
     command, check = calls["run"]
     assert check is True
     assert command[1:5] == ["update", "OpenCLICollective.codereview-cli", "--version", "1.2.3"]
+    assert command[5:8] == ["--urls", assets.x64.url, assets.arm64.url]
     assert command[-2:] == ["--token", "winget-token"]
 
 
@@ -263,6 +273,58 @@ def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(mo
     assert command[2:5] == ["--prtitle", "New package: OpenCLICollective.codereview-cli version 1.2.3", "--token"]
     assert command[5] == "winget-token"
     assert command[6] == "--no-open"
+
+
+def test_run_submit_missing_package_without_bootstrap_fails_before_download(monkeypatch):
+    calls = {}
+
+    monkeypatch.setattr(
+        winget_submit,
+        "load_release_assets",
+        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
+    )
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: _assets())
+    monkeypatch.setattr(winget_submit, "package_exists", lambda package_id, github_token: False)
+    monkeypatch.setattr(
+        winget_submit,
+        "download_file",
+        lambda url, dest, timeout_seconds: calls.setdefault("download_file", True),
+    )
+    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check: calls.setdefault("run", True))
+
+    with pytest.raises(winget_submit.SubmitError, match="bootstrap is not true"):
+        winget_submit.run_submit(_args(bootstrap="false"))
+
+    assert "download_file" not in calls
+    assert "run" not in calls
+
+
+def test_run_submit_unverifiable_package_lookup_fails_closed(monkeypatch):
+    calls = {}
+
+    monkeypatch.setattr(
+        winget_submit,
+        "load_release_assets",
+        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
+    )
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: _assets())
+
+    def package_exists(package_id, github_token):
+        raise winget_submit.SubmitError("could not verify whether package exists")
+
+    monkeypatch.setattr(winget_submit, "package_exists", package_exists)
+    monkeypatch.setattr(
+        winget_submit,
+        "download_file",
+        lambda url, dest, timeout_seconds: calls.setdefault("download_file", True),
+    )
+    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check: calls.setdefault("run", True))
+
+    with pytest.raises(winget_submit.SubmitError, match="could not verify"):
+        winget_submit.run_submit(_args(bootstrap="true"))
+
+    assert "download_file" not in calls
+    assert "run" not in calls
 
 
 def _write_manifest(path, data):
