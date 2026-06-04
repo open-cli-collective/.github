@@ -226,7 +226,10 @@ def test_probe_package_state_builds_expected_urls():
 
     assert state.pending_first_submission is True
     assert seen[0] == "https://community.chocolatey.org/api/v2/package/codereview-cli"
-    assert "%24filter=Id+eq+%27codereview-cli%27" in seen[1]
+    assert seen[1] == (
+        "https://community.chocolatey.org/api/v2/Packages()?"
+        "%24filter=Id%20eq%20%27codereview-cli%27&%24orderby=Version%20desc"
+    )
 
 
 def test_probe_package_state_escapes_odata_string_quotes():
@@ -241,7 +244,10 @@ def test_probe_package_state_escapes_odata_string_quotes():
     state = chocolatey_push.probe_package_state("code'review-cli", http_get=http_get)
 
     assert state.pending_first_submission is True
-    assert "%24filter=Id+eq+%27code%27%27review-cli%27" in seen[1]
+    assert seen[1] == (
+        "https://community.chocolatey.org/api/v2/Packages()?"
+        "%24filter=Id%20eq%20%27code%27%27review-cli%27&%24orderby=Version%20desc"
+    )
 
 
 def test_request_text_transport_failure_fails_closed(monkeypatch):
