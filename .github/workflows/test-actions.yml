@@ -156,6 +156,21 @@ jobs:
         shell: bash
         working-directory: actions/release-preflight
 
+  # winget-submit helper logic: package existence decision, asset resolution, and
+  # first-submission manifest rendering.
+  winget-submit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "PyYAML==6.0.2" "pytest>=8,<9"
+        shell: bash
+      - run: python -m pytest -q
+        shell: bash
+        working-directory: actions/winget-submit
+
   # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
   identity-unit:
     runs-on: ubuntu-latest

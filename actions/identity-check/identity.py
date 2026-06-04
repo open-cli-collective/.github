@@ -63,6 +63,7 @@ def normalize(m: dict) -> dict:
     """The stable shape #7/#8 consume. Defaults fill what the workflows need."""
     pkgs = m.get("packages", {}) or {}
     hb = pkgs.get("homebrew", {}) or {}
+    winget = pkgs.get("winget", {}) or {}
     tag = m.get("tag", {}) or {}
     return {
         "binary": m["binary"],
@@ -76,13 +77,22 @@ def normalize(m: dict) -> dict:
                 "canonical_cask": hb.get("canonical_cask"),
                 "alias_casks": hb.get("alias_casks", []) or [],
             },
-            "winget": {"id": (pkgs.get("winget", {}) or {}).get("id")},
+            "winget": {"id": winget.get("id"), "bootstrap": _winget_bootstrap(winget)},
             "chocolatey": {"id": (pkgs.get("chocolatey", {}) or {}).get("id")},
             "linux": {"package_name": (pkgs.get("linux", {}) or {}).get("package_name")},
             "snap": {"state": (pkgs.get("snap", {}) or {}).get("state")},
         },
         "keychain_probe": m.get("keychain_probe"),
     }
+
+
+def _winget_bootstrap(winget: dict) -> bool:
+    if "bootstrap" not in winget:
+        return False
+    value = winget.get("bootstrap")
+    if not isinstance(value, bool):
+        raise ManifestError("packages.winget.bootstrap must be a boolean")
+    return value
 
 
 def _validate_keychain_probe(m: dict) -> list[str]:
@@ -189,6 +199,10 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
     pkgs = m.get("packages", {}) or {}
 
     errors.extend(_validate_keychain_probe(m))
+
+    winget_cfg = pkgs.get("winget", {}) or {}
+    if "bootstrap" in winget_cfg and not isinstance(winget_cfg.get("bootstrap"), bool):
+        errors.append("packages.winget.bootstrap must be a boolean")
 
     # --- linux nfpm + homebrew cask (declared-channel; both read .goreleaser) ---
     # alias_casks are intentionally NOT checked here: they live only in the

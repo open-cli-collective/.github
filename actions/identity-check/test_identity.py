@@ -262,8 +262,27 @@ def test_export_json_shape(tmp_path):
     assert norm["tag"]["prefix"] == "v"
     assert norm["archives"]["name_template"].startswith("slck_v")
     assert norm["packages"]["homebrew"]["alias_casks"] == ["slack-chat-cli"]
+    assert norm["packages"]["winget"] == {
+        "id": "OpenCLICollective.slack-chat-cli",
+        "bootstrap": False,
+    }
     assert norm["packages"]["linux"]["package_name"] == "slck"
     assert norm["version_file"] == "version.txt"
+
+
+def test_export_json_winget_bootstrap_true(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["packages"]["winget"]["bootstrap"] = True
+    wd = build(tmp_path, manifest=m)
+    norm = identity.normalize(identity.load_manifest(manifest_path(wd)))
+    assert norm["packages"]["winget"]["bootstrap"] is True
+
+
+def test_winget_bootstrap_must_be_boolean(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["packages"]["winget"]["bootstrap"] = "true"
+    wd = build(tmp_path, manifest=m)
+    assert any("packages.winget.bootstrap must be a boolean" in e for e in identity.validate(manifest_path(wd), wd, wd))
 
 
 # --- monorepo: tool-local identity + packaging under tools/<tool>, but the

@@ -1,0 +1,59 @@
+name: Winget submit
+description: Submit an existing winget package update or bootstrap a first-time package submission.
+inputs:
+  package-id:
+    description: "Winget PackageIdentifier, for example OpenCLICollective.codereview-cli"
+    required: true
+  version:
+    description: "PackageVersion to publish"
+    required: true
+  final-tag:
+    description: "GitHub release tag containing the published assets"
+    required: true
+  repo:
+    description: "GitHub repository containing the release assets, owner/name"
+    required: true
+  working-directory:
+    description: "Tool root containing packaging/winget templates"
+    required: false
+    default: "."
+  bootstrap:
+    description: "Allow first-time package submission if the winget package does not exist"
+    required: false
+    default: "false"
+  github-token:
+    description: "GitHub token for release asset download and winget-pkgs existence lookup"
+    required: true
+  winget-token:
+    description: "GitHub token used by wingetcreate to submit to microsoft/winget-pkgs"
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: pip install "PyYAML==6.0.2"
+    - shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ inputs.version }}
+        FINAL_TAG: ${{ inputs.final-tag }}
+        REPO: ${{ inputs.repo }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        WINGET_TOKEN: ${{ inputs.winget-token }}
+      run: |
+        set -euo pipefail
+        python "$ACTION_PATH/winget_submit.py" submit \
+          --package-id "$PACKAGE_ID" \
+          --version "$VERSION" \
+          --final-tag "$FINAL_TAG" \
+          --repo "$REPO" \
+          --working-dir "$WORKING_DIRECTORY" \
+          --bootstrap "$BOOTSTRAP" \
+          --github-token "$GITHUB_TOKEN" \
+          --winget-token "$WINGET_TOKEN"
