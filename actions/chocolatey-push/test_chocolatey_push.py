@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from urllib.error import URLError
 
 import pytest
 
@@ -22,9 +23,11 @@ ENTRY_FEED = """\
 
 def test_pack_and_push_success(tmp_path):
     calls = []
+    work = _working_dir(tmp_path)
+    choco_dir = work / "packaging" / "chocolatey"
 
     def runner(command, cwd, text, capture_output):
-        calls.append(command)
+        calls.append((command, cwd))
         if command == ["choco", "pack"]:
             (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
             return _result(0, stdout="packed\n")
@@ -32,14 +35,27 @@ def test_pack_and_push_success(tmp_path):
 
     rc = chocolatey_push.pack_and_push(
         package_id="codereview-cli",
-        working_dir=_working_dir(tmp_path),
+        working_dir=work,
         api_key="key",
         command_runner=runner,
     )
 
     assert rc == 0
-    assert calls[0] == ["choco", "pack"]
-    assert calls[1][:3] == ["choco", "push", "codereview-cli.1.0.0.nupkg"]
+    assert calls == [
+        (["choco", "pack"], choco_dir),
+        (
+            [
+                "choco",
+                "push",
+                "codereview-cli.1.0.0.nupkg",
+                "--source",
+                "https://push.chocolatey.org/",
+                "--key",
+                "key",
+            ],
+            choco_dir,
+        ),
+    ]
 
 
 def test_pack_and_push_requires_api_key(tmp_path):
@@ -97,7 +113,17 @@ def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
     assert "was not accepted for this release" in summary.read_text()
 
 
-def test_forbidden_invalid_key_output_fails_before_probe(tmp_path):
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "403 (Forbidden): Invalid API Key",
+        "403 (Forbidden): unauthorized",
+        "403 (Forbidden): package is not owned by this user",
+        "403 (Forbidden): not the owner of package codereview-cli",
+        "403 (Forbidden): package owner mismatch",
+    ],
+)
+def test_forbidden_credential_or_owner_output_fails_before_probe(tmp_path, stderr):
     calls = []
 
     def http_get(url):
@@ -109,7 +135,7 @@ def test_forbidden_invalid_key_output_fails_before_probe(tmp_path):
             package_id="codereview-cli",
             working_dir=_working_dir(tmp_path),
             api_key="key",
-            command_runner=_forbidden_push_runner(tmp_path, stderr="403 (Forbidden): Invalid API Key"),
+            command_runner=_forbidden_push_runner(tmp_path, stderr=stderr),
             http_get=http_get,
         )
     assert calls == []
@@ -179,6 +205,16 @@ def test_probe_package_state_builds_expected_urls():
     assert state.pending_first_submission is True
     assert seen[0] == "https://community.chocolatey.org/api/v2/package/codereview-cli"
     assert "%24filter=Id+eq+%27codereview-cli%27" in seen[1]
+
+
+def test_request_text_transport_failure_fails_closed(monkeypatch):
+    def fail(request, timeout):
+        raise URLError("network down")
+
+    monkeypatch.setattr(chocolatey_push, "urlopen", fail)
+
+    with pytest.raises(chocolatey_push.ProbeError, match="request failed"):
+        chocolatey_push.request_text("https://community.chocolatey.org/api/v2/package/codereview-cli")
 
 
 def _working_dir(tmp_path):
