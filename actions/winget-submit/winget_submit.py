@@ -182,7 +182,7 @@ def render_bootstrap_manifests(
         if src == installer_manifest:
             _update_installer_manifest(data, assets)
         dest = output / src.name
-        dest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        dest.write_text(_dump_manifest(data, src), encoding="utf-8")
         rendered.append(dest)
     return rendered
 
@@ -328,6 +328,26 @@ def _update_installer_manifest(data: dict, assets: WindowsAssets) -> None:
     missing = [arch for arch in ("x64", "arm64") if arch not in seen]
     if missing:
         raise SubmitError(f"installer manifest missing architectures: {', '.join(missing)}")
+
+
+def _dump_manifest(data: dict, path: Path) -> str:
+    manifest_type = _required_manifest_string(data, "ManifestType", path)
+    manifest_version = _required_manifest_string(data, "ManifestVersion", path)
+    schema = (
+        "https://aka.ms/"
+        f"winget-manifest.{manifest_type}.{manifest_version}.schema.json"
+    )
+    return (
+        f"# yaml-language-server: $schema={schema}\n\n"
+        f"{yaml.safe_dump(data, sort_keys=False)}"
+    )
+
+
+def _required_manifest_string(data: dict, key: str, path: Path) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise SubmitError(f"{path}: {key} is required for bootstrap rendering")
+    return value
 
 
 def _github_request(url: str, token: str, accept: str) -> Request:

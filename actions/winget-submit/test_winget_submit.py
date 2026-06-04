@@ -218,17 +218,84 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
         f"{package_id}.installer.yaml",
     }
     assert all(pathlib.Path(path).is_relative_to(rendered) for path in output_paths)
-    rendered_version = yaml.safe_load((rendered / f"{package_id}.yaml").read_text())
-    rendered_locale = yaml.safe_load((rendered / f"{package_id}.locale.en-US.yaml").read_text())
+    rendered_version_text = (rendered / f"{package_id}.yaml").read_text()
+    rendered_locale_text = (rendered / f"{package_id}.locale.en-US.yaml").read_text()
+    rendered_installer_text = (rendered / f"{package_id}.installer.yaml").read_text()
+    assert (
+        rendered_version_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json"
+    )
+    assert (
+        rendered_locale_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json"
+    )
+    assert (
+        rendered_installer_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json"
+    )
+    rendered_version = yaml.safe_load(rendered_version_text)
+    rendered_locale = yaml.safe_load(rendered_locale_text)
     assert rendered_version["PackageVersion"] == "1.2.3"
     assert rendered_locale["PackageVersion"] == "1.2.3"
-    rendered_installer = yaml.safe_load((rendered / f"{package_id}.installer.yaml").read_text())
+    rendered_installer = yaml.safe_load(rendered_installer_text)
     assert rendered_installer["PackageVersion"] == "1.2.3"
     installers = {item["Architecture"]: item for item in rendered_installer["Installers"]}
     assert installers["x64"]["InstallerUrl"] == assets.x64.url
     assert installers["x64"]["InstallerSha256"] == "a" * 64
     assert installers["arm64"]["InstallerUrl"] == assets.arm64.url
     assert installers["arm64"]["InstallerSha256"] == "b" * 64
+
+
+def test_render_bootstrap_manifests_requires_schema_metadata(tmp_path):
+    package_id = "OpenCLICollective.codereview-cli"
+    source = tmp_path / "tool"
+    winget_dir = source / "packaging" / "winget"
+    winget_dir.mkdir(parents=True)
+    _write_manifest(
+        winget_dir / f"{package_id}.yaml",
+        {
+            "PackageIdentifier": package_id,
+            "PackageVersion": "0.0.0",
+            "DefaultLocale": "en-US",
+            "ManifestType": "version",
+            "ManifestVersion": "1.10.0",
+        },
+    )
+    _write_manifest(
+        winget_dir / f"{package_id}.locale.en-US.yaml",
+        {
+            "PackageIdentifier": package_id,
+            "PackageVersion": "0.0.0",
+            "PackageLocale": "en-US",
+            "Publisher": "Open CLI Collective",
+            "PackageName": "Code Review CLI",
+            "ShortDescription": "Automated pull-request review CLI",
+            "ManifestType": "defaultLocale",
+            "ManifestVersion": "1.10.0",
+        },
+    )
+    _write_manifest(
+        winget_dir / f"{package_id}.installer.yaml",
+        {
+            "PackageIdentifier": package_id,
+            "PackageVersion": "0.0.0",
+            "InstallerType": "zip",
+            "Installers": [
+                {"Architecture": "x64", "InstallerUrl": "old-x64", "InstallerSha256": "old-x64-sha"},
+                {"Architecture": "arm64", "InstallerUrl": "old-arm64", "InstallerSha256": "old-arm64-sha"},
+            ],
+            "ManifestType": "installer",
+        },
+    )
+
+    with pytest.raises(winget_submit.SubmitError, match="ManifestVersion"):
+        winget_submit.render_bootstrap_manifests(
+            package_id=package_id,
+            version="1.2.3",
+            working_dir=source,
+            output_dir=tmp_path / "rendered",
+            assets=_assets(),
+        )
 
 
 def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
