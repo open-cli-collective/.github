@@ -97,6 +97,24 @@ def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
     assert "was not accepted for this release" in summary.read_text()
 
 
+def test_forbidden_invalid_key_output_fails_before_probe(tmp_path):
+    calls = []
+
+    def http_get(url):
+        calls.append(url)
+        return chocolatey_push.HttpResponse(200, EMPTY_FEED)
+
+    with pytest.raises(chocolatey_push.PushError, match="credential"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=_forbidden_push_runner(tmp_path, stderr="403 (Forbidden): Invalid API Key"),
+            http_get=http_get,
+        )
+    assert calls == []
+
+
 def test_forbidden_visible_package_fails_release(tmp_path):
     with pytest.raises(chocolatey_push.PushError, match="pending first-submission"):
         chocolatey_push.pack_and_push(
@@ -169,12 +187,15 @@ def _working_dir(tmp_path):
     return work
 
 
-def _forbidden_push_runner(tmp_path):
+def _forbidden_push_runner(
+    tmp_path,
+    stderr="Response status code does not indicate success: 403 (Forbidden).",
+):
     def runner(command, cwd, text, capture_output):
         if command == ["choco", "pack"]:
             (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
             return _result(0, stdout="packed\n")
-        return _result(1, stderr="Response status code does not indicate success: 403 (Forbidden).")
+        return _result(1, stderr=stderr)
 
     return runner
 

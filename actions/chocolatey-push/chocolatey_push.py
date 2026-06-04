@@ -94,6 +94,8 @@ def pack_and_push(
         return 0
     if not _looks_like_forbidden(push.output):
         raise PushError(f"choco push failed with exit code {push.returncode}")
+    if _looks_like_credential_or_owner_failure(push.output):
+        raise PushError("choco push returned 403 with a credential or ownership failure")
 
     state = probe_package_state(package_id, http_get=http_get)
     if not state.pending_first_submission:
@@ -161,6 +163,21 @@ def _parse_atom_entries(body: str) -> int:
 
 def _looks_like_forbidden(output: str) -> bool:
     return "403" in output and "Forbidden" in output
+
+
+def _looks_like_credential_or_owner_failure(output: str) -> bool:
+    lower = output.lower()
+    patterns = (
+        "invalid api key",
+        "invalid apikey",
+        "api key is invalid",
+        "unauthorized",
+        "not authorized",
+        "not owned",
+        "not the owner",
+        "package owner",
+    )
+    return any(pattern in lower for pattern in patterns)
 
 
 def _print_command_output(result: CommandResult) -> None:
