@@ -133,7 +133,10 @@ def probe_package_state(package_id: str, http_get=None) -> PackageState:
     if package_response.status != 200:
         raise ProbeError(f"Chocolatey package endpoint returned HTTP {package_response.status}")
 
-    query = urlencode({"$filter": f"Id eq '{_odata_string(package_id)}'", "$orderby": "Version desc"})
+    query = urlencode(
+        {"$filter": f"Id eq '{_odata_string(package_id)}'", "$orderby": "Version desc"},
+        quote_via=quote,
+    )
     feed_response = http_get(f"{COMMUNITY_API}/Packages()?{query}")
     if feed_response.status != 200:
         raise ProbeError(f"Chocolatey package listing returned HTTP {feed_response.status}")
