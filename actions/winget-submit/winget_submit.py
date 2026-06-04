@@ -25,6 +25,7 @@ WINGETCREATE_RELEASE_URL = "https://api.github.com/repos/microsoft/winget-create
 HTTP_TIMEOUT_SECONDS = 30
 WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS = 60
 WINGETCREATE_COMMAND_TIMEOUT_SECONDS = 300
+WINGET_MANIFEST_TYPES = {"version", "installer", "defaultLocale", "locale"}
 
 
 class SubmitError(Exception):
@@ -174,17 +175,18 @@ def render_bootstrap_manifests(
     if missing:
         raise SubmitError(f"winget bootstrap template missing: {', '.join(missing)}")
 
-    output.mkdir(parents=True, exist_ok=True)
-    rendered: list[Path] = []
+    rendered: list[tuple[Path, str]] = []
     for src in [version_manifest, *locale_manifests, installer_manifest]:
         data = _load_manifest(src, package_id)
         data["PackageVersion"] = version
         if src == installer_manifest:
             _update_installer_manifest(data, assets)
         dest = output / src.name
-        dest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-        rendered.append(dest)
-    return rendered
+        rendered.append((dest, _dump_manifest(data, src)))
+    output.mkdir(parents=True, exist_ok=True)
+    for dest, text in rendered:
+        dest.write_text(text, encoding="utf-8")
+    return [dest for dest, _ in rendered]
 
 
 def build_update_command(wingetcreate: Path, package_id: str, version: str, assets: WindowsAssets, token: str) -> list[str]:
@@ -328,6 +330,31 @@ def _update_installer_manifest(data: dict, assets: WindowsAssets) -> None:
     missing = [arch for arch in ("x64", "arm64") if arch not in seen]
     if missing:
         raise SubmitError(f"installer manifest missing architectures: {', '.join(missing)}")
+
+
+def _dump_manifest(data: dict, path: Path) -> str:
+    manifest_type = _required_manifest_string(data, "ManifestType", path)
+    manifest_version = _required_manifest_string(data, "ManifestVersion", path)
+    if manifest_type not in WINGET_MANIFEST_TYPES:
+        raise SubmitError(f"{path}: ManifestType must be one of {sorted(WINGET_MANIFEST_TYPES)}")
+    rendered = dict(data)
+    rendered["ManifestType"] = manifest_type
+    rendered["ManifestVersion"] = manifest_version
+    schema = (
+        "https://aka.ms/"
+        f"winget-manifest.{manifest_type}.{manifest_version}.schema.json"
+    )
+    return (
+        f"# yaml-language-server: $schema={schema}\n\n"
+        f"{yaml.safe_dump(rendered, sort_keys=False)}"
+    )
+
+
+def _required_manifest_string(data: dict, key: str, path: Path) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise SubmitError(f"{path}: {key} is required for bootstrap rendering")
+    return value.strip()
 
 
 def _github_request(url: str, token: str, accept: str) -> Request:

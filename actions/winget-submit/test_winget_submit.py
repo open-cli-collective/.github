@@ -148,8 +148,8 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
             "PackageIdentifier": package_id,
             "PackageVersion": "0.0.0",
             "DefaultLocale": "en-US",
-            "ManifestType": "version",
-            "ManifestVersion": "1.10.0",
+            "ManifestType": " version ",
+            "ManifestVersion": " 1.9.0 ",
         },
     )
     _write_manifest(
@@ -161,8 +161,8 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
             "Publisher": "Open CLI Collective",
             "PackageName": "Code Review CLI",
             "ShortDescription": "Automated pull-request review CLI",
-            "ManifestType": "defaultLocale",
-            "ManifestVersion": "1.10.0",
+            "ManifestType": " defaultLocale ",
+            "ManifestVersion": " 1.9.0 ",
         },
     )
     installer_path = winget_dir / f"{package_id}.installer.yaml"
@@ -184,8 +184,8 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
                     "InstallerSha256": "CHECKSUM_ARM64_PLACEHOLDER",
                 },
             ],
-            "ManifestType": "installer",
-            "ManifestVersion": "1.10.0",
+            "ManifestType": " installer ",
+            "ManifestVersion": " 1.9.0 ",
         },
     )
     original_installer = installer_path.read_text()
@@ -218,17 +218,84 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
         f"{package_id}.installer.yaml",
     }
     assert all(pathlib.Path(path).is_relative_to(rendered) for path in output_paths)
-    rendered_version = yaml.safe_load((rendered / f"{package_id}.yaml").read_text())
-    rendered_locale = yaml.safe_load((rendered / f"{package_id}.locale.en-US.yaml").read_text())
+    rendered_version_text = (rendered / f"{package_id}.yaml").read_text()
+    rendered_locale_text = (rendered / f"{package_id}.locale.en-US.yaml").read_text()
+    rendered_installer_text = (rendered / f"{package_id}.installer.yaml").read_text()
+    assert (
+        rendered_version_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json"
+    )
+    assert (
+        rendered_locale_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json"
+    )
+    assert (
+        rendered_installer_text.splitlines()[0]
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json"
+    )
+    rendered_version = yaml.safe_load(rendered_version_text)
+    rendered_locale = yaml.safe_load(rendered_locale_text)
     assert rendered_version["PackageVersion"] == "1.2.3"
+    assert rendered_version["ManifestType"] == "version"
+    assert rendered_version["ManifestVersion"] == "1.9.0"
     assert rendered_locale["PackageVersion"] == "1.2.3"
-    rendered_installer = yaml.safe_load((rendered / f"{package_id}.installer.yaml").read_text())
+    assert rendered_locale["ManifestType"] == "defaultLocale"
+    assert rendered_locale["ManifestVersion"] == "1.9.0"
+    rendered_installer = yaml.safe_load(rendered_installer_text)
     assert rendered_installer["PackageVersion"] == "1.2.3"
+    assert rendered_installer["ManifestType"] == "installer"
+    assert rendered_installer["ManifestVersion"] == "1.9.0"
     installers = {item["Architecture"]: item for item in rendered_installer["Installers"]}
     assert installers["x64"]["InstallerUrl"] == assets.x64.url
     assert installers["x64"]["InstallerSha256"] == "a" * 64
     assert installers["arm64"]["InstallerUrl"] == assets.arm64.url
     assert installers["arm64"]["InstallerSha256"] == "b" * 64
+
+
+@pytest.mark.parametrize("manifest_name", ["version", "locale", "installer"])
+@pytest.mark.parametrize("missing_key", ["ManifestType", "ManifestVersion"])
+def test_render_bootstrap_manifests_requires_schema_metadata(tmp_path, manifest_name, missing_key):
+    package_id = "OpenCLICollective.codereview-cli"
+    source = tmp_path / "tool"
+    winget_dir = source / "packaging" / "winget"
+    winget_dir.mkdir(parents=True)
+    manifests = _bootstrap_manifest_templates(winget_dir, package_id)
+    manifests[manifest_name][1].pop(missing_key)
+    for path, data in manifests.values():
+        _write_manifest(path, data)
+
+    rendered = tmp_path / "rendered"
+    with pytest.raises(winget_submit.SubmitError, match=missing_key):
+        winget_submit.render_bootstrap_manifests(
+            package_id=package_id,
+            version="1.2.3",
+            working_dir=source,
+            output_dir=rendered,
+            assets=_assets(),
+        )
+    assert not rendered.exists()
+
+
+def test_render_bootstrap_manifests_rejects_unknown_manifest_type(tmp_path):
+    package_id = "OpenCLICollective.codereview-cli"
+    source = tmp_path / "tool"
+    winget_dir = source / "packaging" / "winget"
+    winget_dir.mkdir(parents=True)
+    manifests = _bootstrap_manifest_templates(winget_dir, package_id)
+    manifests["version"][1]["ManifestType"] = "versions"
+    for path, data in manifests.values():
+        _write_manifest(path, data)
+
+    rendered = tmp_path / "rendered"
+    with pytest.raises(winget_submit.SubmitError, match="ManifestType"):
+        winget_submit.render_bootstrap_manifests(
+            package_id=package_id,
+            version="1.2.3",
+            working_dir=source,
+            output_dir=rendered,
+            assets=_assets(),
+        )
+    assert not rendered.exists()
 
 
 def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
@@ -407,6 +474,56 @@ def test_run_submit_unverifiable_package_lookup_fails_closed(monkeypatch):
 
 def _write_manifest(path, data):
     path.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _bootstrap_manifest_templates(winget_dir, package_id):
+    return {
+        "version": (
+            winget_dir / f"{package_id}.yaml",
+            {
+                "PackageIdentifier": package_id,
+                "PackageVersion": "0.0.0",
+                "DefaultLocale": "en-US",
+                "ManifestType": "version",
+                "ManifestVersion": "1.10.0",
+            },
+        ),
+        "locale": (
+            winget_dir / f"{package_id}.locale.en-US.yaml",
+            {
+                "PackageIdentifier": package_id,
+                "PackageVersion": "0.0.0",
+                "PackageLocale": "en-US",
+                "Publisher": "Open CLI Collective",
+                "PackageName": "Code Review CLI",
+                "ShortDescription": "Automated pull-request review CLI",
+                "ManifestType": "defaultLocale",
+                "ManifestVersion": "1.10.0",
+            },
+        ),
+        "installer": (
+            winget_dir / f"{package_id}.installer.yaml",
+            {
+                "PackageIdentifier": package_id,
+                "PackageVersion": "0.0.0",
+                "InstallerType": "zip",
+                "Installers": [
+                    {
+                        "Architecture": "x64",
+                        "InstallerUrl": "old-x64",
+                        "InstallerSha256": "old-x64-sha",
+                    },
+                    {
+                        "Architecture": "arm64",
+                        "InstallerUrl": "old-arm64",
+                        "InstallerSha256": "old-arm64-sha",
+                    },
+                ],
+                "ManifestType": "installer",
+                "ManifestVersion": "1.10.0",
+            },
+        ),
+    }
 
 
 def _assets():
