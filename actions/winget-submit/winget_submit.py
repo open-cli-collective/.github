@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen, urlretrieve
+from urllib.request import Request, urlopen
 
 import yaml
 
@@ -21,6 +22,8 @@ MODE_FIRST_SUBMISSION = "first-submission"
 MODE_MISSING_BOOTSTRAP_DISABLED = "missing-with-bootstrap-disabled"
 
 WINGETCREATE_URL = "https://aka.ms/wingetcreate/latest"
+HTTP_TIMEOUT_SECONDS = 30
+WINGETCREATE_TIMEOUT_SECONDS = 60
 
 
 class SubmitError(Exception):
@@ -191,7 +194,10 @@ def build_submit_command(wingetcreate: Path, package_id: str, version: str, rend
 
 def github_request_json(url: str, token: str):
     try:
-        with urlopen(_github_request(url, token, "application/vnd.github+json")) as response:
+        with urlopen(
+            _github_request(url, token, "application/vnd.github+json"),
+            timeout=HTTP_TIMEOUT_SECONDS,
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise GitHubAPIError(exc.code, exc.read().decode("utf-8", "replace")) from exc
@@ -201,7 +207,7 @@ def github_request_json(url: str, token: str):
 
 def github_request_text(url: str, token: str, accept: str = "application/vnd.github+json") -> str:
     try:
-        with urlopen(_github_request(url, token, accept)) as response:
+        with urlopen(_github_request(url, token, accept), timeout=HTTP_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8")
     except HTTPError as exc:
         raise GitHubAPIError(exc.code, exc.read().decode("utf-8", "replace")) from exc
@@ -229,7 +235,7 @@ def run_submit(args) -> int:
         )
 
     wingetcreate = Path.cwd() / "wingetcreate.exe"
-    urlretrieve(WINGETCREATE_URL, wingetcreate)
+    download_file(WINGETCREATE_URL, wingetcreate, WINGETCREATE_TIMEOUT_SECONDS)
 
     if mode == MODE_UPDATE:
         subprocess.run(
@@ -301,6 +307,16 @@ def _github_request(url: str, token: str, accept: str) -> Request:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return Request(url, headers=headers)
+
+
+def download_file(url: str, dest: Path, timeout_seconds: int) -> None:
+    request = Request(url, headers={"User-Agent": "open-cli-collective-winget-submit"})
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            with dest.open("wb") as fh:
+                shutil.copyfileobj(response, fh)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise SubmitError(f"failed to download {url}: {exc}") from exc
 
 
 def _parse_bool(value: str) -> bool:

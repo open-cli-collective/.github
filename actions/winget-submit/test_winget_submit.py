@@ -1,4 +1,5 @@
 import pathlib
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -180,5 +181,109 @@ def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
         )
 
 
+def test_run_submit_existing_package_uses_update_command_and_token_contexts(monkeypatch):
+    assets = _assets()
+    calls = {}
+
+    def load_release_assets(repo, final_tag, github_token):
+        calls["load_release_assets"] = (repo, final_tag, github_token)
+        return "checksums", {"asset": "url"}
+
+    def resolve_windows_assets(checksums_text, release_assets):
+        calls["resolve_windows_assets"] = (checksums_text, release_assets)
+        return assets
+
+    def package_exists(package_id, github_token):
+        calls["package_exists"] = (package_id, github_token)
+        return True
+
+    def download_file(url, dest, timeout_seconds):
+        calls["download_file"] = (url, pathlib.Path(dest).name, timeout_seconds)
+
+    def run(command, check):
+        calls["run"] = (command, check)
+
+    monkeypatch.setattr(winget_submit, "load_release_assets", load_release_assets)
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", resolve_windows_assets)
+    monkeypatch.setattr(winget_submit, "package_exists", package_exists)
+    monkeypatch.setattr(winget_submit, "download_file", download_file)
+    monkeypatch.setattr(winget_submit.subprocess, "run", run)
+
+    rc = winget_submit.run_submit(_args(bootstrap="true"))
+
+    assert rc == 0
+    assert calls["load_release_assets"] == ("open-cli-collective/codereview-cli", "v1.2.3", "github-token")
+    assert calls["package_exists"] == ("OpenCLICollective.codereview-cli", "github-token")
+    command, check = calls["run"]
+    assert check is True
+    assert command[1:5] == ["update", "OpenCLICollective.codereview-cli", "--version", "1.2.3"]
+    assert command[-2:] == ["--token", "winget-token"]
+
+
+def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(monkeypatch):
+    assets = _assets()
+    calls = {}
+
+    monkeypatch.setattr(
+        winget_submit,
+        "load_release_assets",
+        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
+    )
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: assets)
+    monkeypatch.setattr(winget_submit, "package_exists", lambda package_id, github_token: False)
+    monkeypatch.setattr(
+        winget_submit,
+        "download_file",
+        lambda url, dest, timeout_seconds: calls.setdefault("download_file", pathlib.Path(dest).name),
+    )
+
+    def render_bootstrap_manifests(package_id, version, working_dir, output_dir, assets):
+        calls["render"] = (package_id, version, pathlib.Path(working_dir), pathlib.Path(output_dir).exists())
+        return [pathlib.Path(output_dir) / f"{package_id}.yaml"]
+
+    def run(command, check):
+        calls["run"] = (command, check, pathlib.Path(command[-1]).exists())
+
+    monkeypatch.setattr(winget_submit, "render_bootstrap_manifests", render_bootstrap_manifests)
+    monkeypatch.setattr(winget_submit.subprocess, "run", run)
+
+    rc = winget_submit.run_submit(_args(bootstrap="true"))
+
+    assert rc == 0
+    assert calls["render"] == (
+        "OpenCLICollective.codereview-cli",
+        "1.2.3",
+        pathlib.Path("."),
+        True,
+    )
+    command, check, rendered_dir_exists_during_submit = calls["run"]
+    assert check is True
+    assert rendered_dir_exists_during_submit is True
+    assert command[1] == "submit"
+    assert command[2:5] == ["--prtitle", "New package: OpenCLICollective.codereview-cli version 1.2.3", "--token"]
+    assert command[5] == "winget-token"
+    assert command[6] == "--no-open"
+
+
 def _write_manifest(path, data):
     path.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _assets():
+    return winget_submit.WindowsAssets(
+        x64=winget_submit.WindowsAsset("x64.zip", "https://example.test/x64.zip", "a"),
+        arm64=winget_submit.WindowsAsset("arm64.zip", "https://example.test/arm64.zip", "b"),
+    )
+
+
+def _args(bootstrap):
+    return SimpleNamespace(
+        package_id="OpenCLICollective.codereview-cli",
+        version="1.2.3",
+        final_tag="v1.2.3",
+        repo="open-cli-collective/codereview-cli",
+        working_dir=".",
+        bootstrap=bootstrap,
+        github_token="github-token",
+        winget_token="winget-token",
+    )
