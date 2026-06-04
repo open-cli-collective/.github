@@ -102,13 +102,19 @@ def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
     work = _working_dir(tmp_path)
     choco_dir = work / "packaging" / "chocolatey"
     calls = []
+    seen_urls = []
+    http_get = _http_get({"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, EMPTY_FEED)})
+
+    def recording_http_get(url):
+        seen_urls.append(url)
+        return http_get(url)
 
     rc = chocolatey_push.pack_and_push(
         package_id="codereview-cli",
         working_dir=work,
         api_key="key",
         command_runner=_forbidden_push_runner(tmp_path, calls=calls),
-        http_get=_http_get({"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, EMPTY_FEED)}),
+        http_get=recording_http_get,
         summary_path=str(summary),
     )
 
@@ -126,6 +132,13 @@ def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
                 "key",
             ],
             choco_dir,
+        ),
+    ]
+    assert seen_urls == [
+        "https://community.chocolatey.org/api/v2/package/codereview-cli",
+        (
+            "https://community.chocolatey.org/api/v2/Packages()?"
+            "%24filter=Id%20eq%20%27codereview-cli%27&%24orderby=Version%20desc"
         ),
     ]
     assert "was not accepted for this release" in summary.read_text()
