@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,9 +21,10 @@ MODE_UPDATE = "update"
 MODE_FIRST_SUBMISSION = "first-submission"
 MODE_MISSING_BOOTSTRAP_DISABLED = "missing-with-bootstrap-disabled"
 
-WINGETCREATE_URL = "https://aka.ms/wingetcreate/latest"
+WINGETCREATE_RELEASE_URL = "https://api.github.com/repos/microsoft/winget-create/releases/latest"
 HTTP_TIMEOUT_SECONDS = 30
-WINGETCREATE_TIMEOUT_SECONDS = 60
+WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS = 60
+WINGETCREATE_COMMAND_TIMEOUT_SECONDS = 300
 
 
 class SubmitError(Exception):
@@ -49,6 +50,12 @@ class WindowsAssets:
     arm64: WindowsAsset
 
 
+@dataclass(frozen=True)
+class DownloadAsset:
+    url: str
+    sha256: str
+
+
 def package_id_to_winget_path(package_id: str) -> str:
     parts = [part for part in package_id.split(".") if part]
     if len(parts) < 2:
@@ -56,8 +63,8 @@ def package_id_to_winget_path(package_id: str) -> str:
     return "/".join(["manifests", parts[0][0].lower(), *parts])
 
 
-def select_mode(package_exists: bool, bootstrap: bool) -> str:
-    if package_exists:
+def select_mode(exists: bool, bootstrap: bool) -> str:
+    if exists:
         return MODE_UPDATE
     if bootstrap:
         return MODE_FIRST_SUBMISSION
@@ -100,6 +107,23 @@ def load_release_assets(repo: str, final_tag: str, github_token: str) -> tuple[s
         if asset.get("browser_download_url")
     }
     return checksums_text, download_urls
+
+
+def load_wingetcreate_asset(github_token: str, request_json=None) -> DownloadAsset:
+    request_json = request_json or github_request_json
+    release = request_json(WINGETCREATE_RELEASE_URL, github_token)
+    for asset in release.get("assets") or []:
+        if asset.get("name") != "wingetcreate.exe":
+            continue
+        url = asset.get("browser_download_url")
+        digest = asset.get("digest") or ""
+        prefix = "sha256:"
+        if not url:
+            raise SubmitError("wingetcreate.exe release asset has no download URL")
+        if not digest.startswith(prefix):
+            raise SubmitError("wingetcreate.exe release asset has no SHA-256 digest")
+        return DownloadAsset(url=url, sha256=digest[len(prefix):])
+    raise SubmitError("wingetcreate.exe asset not found in microsoft/winget-create latest release")
 
 
 def resolve_windows_assets(checksums_text: str, release_assets: dict[str, str]) -> WindowsAssets:
@@ -222,8 +246,6 @@ def run_submit(args) -> int:
     if not args.winget_token:
         raise SubmitError("winget-token is required")
 
-    checksums_text, release_assets = load_release_assets(args.repo, args.final_tag, args.github_token)
-    assets = resolve_windows_assets(checksums_text, release_assets)
     exists = package_exists(args.package_id, args.github_token)
     mode = select_mode(exists, bootstrap)
     _write_summary(f"winget-submit mode: {mode} for {args.package_id} {args.version}")
@@ -234,13 +256,22 @@ def run_submit(args) -> int:
             "packages.winget.bootstrap is not true"
         )
 
+    checksums_text, release_assets = load_release_assets(args.repo, args.final_tag, args.github_token)
+    assets = resolve_windows_assets(checksums_text, release_assets)
+    wingetcreate_asset = load_wingetcreate_asset(args.github_token)
     wingetcreate = Path.cwd() / "wingetcreate.exe"
-    download_file(WINGETCREATE_URL, wingetcreate, WINGETCREATE_TIMEOUT_SECONDS)
+    download_file(
+        wingetcreate_asset.url,
+        wingetcreate,
+        WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS,
+        wingetcreate_asset.sha256,
+    )
 
     if mode == MODE_UPDATE:
         subprocess.run(
             build_update_command(wingetcreate, args.package_id, args.version, assets, args.winget_token),
             check=True,
+            timeout=WINGETCREATE_COMMAND_TIMEOUT_SECONDS,
         )
         return 0
 
@@ -262,6 +293,7 @@ def run_submit(args) -> int:
                 args.winget_token,
             ),
             check=True,
+            timeout=WINGETCREATE_COMMAND_TIMEOUT_SECONDS,
         )
     return 0
 
@@ -309,14 +341,26 @@ def _github_request(url: str, token: str, accept: str) -> Request:
     return Request(url, headers=headers)
 
 
-def download_file(url: str, dest: Path, timeout_seconds: int) -> None:
+def download_file(url: str, dest: Path, timeout_seconds: int, expected_sha256: str) -> None:
     request = Request(url, headers={"User-Agent": "open-cli-collective-winget-submit"})
     try:
+        hasher = hashlib.sha256()
         with urlopen(request, timeout=timeout_seconds) as response:
             with dest.open("wb") as fh:
-                shutil.copyfileobj(response, fh)
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    fh.write(chunk)
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         raise SubmitError(f"failed to download {url}: {exc}") from exc
+    actual = hasher.hexdigest()
+    if actual.lower() != expected_sha256.lower():
+        dest.unlink(missing_ok=True)
+        raise SubmitError(
+            f"downloaded {url} checksum {actual} did not match expected {expected_sha256}"
+        )
 
 
 def _parse_bool(value: str) -> bool:
@@ -360,6 +404,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except GitHubAPIError as exc:
         print(f"::error::GitHub API request failed with status {exc.status}: {exc}", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired as exc:
+        print(f"::error::wingetcreate timed out after {exc.timeout} seconds", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
         print(f"::error::wingetcreate failed with exit code {exc.returncode}", file=sys.stderr)

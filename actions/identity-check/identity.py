@@ -30,6 +30,7 @@ from defusedxml.common import DefusedXmlException
 from xml.etree.ElementTree import ParseError
 
 SCHEMA = "open-cli-identity/v1"
+WINGET_BOOTSTRAP_TYPE_ERROR = "packages.winget.bootstrap must be a boolean"
 
 
 class ManifestError(Exception):
@@ -91,7 +92,7 @@ def _winget_bootstrap(winget: dict) -> bool:
         return False
     value = winget.get("bootstrap")
     if not isinstance(value, bool):
-        raise ManifestError("packages.winget.bootstrap must be a boolean")
+        raise ManifestError(WINGET_BOOTSTRAP_TYPE_ERROR)
     return value
 
 
@@ -201,8 +202,10 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
     errors.extend(_validate_keychain_probe(m))
 
     winget_cfg = pkgs.get("winget", {}) or {}
-    if "bootstrap" in winget_cfg and not isinstance(winget_cfg.get("bootstrap"), bool):
-        errors.append("packages.winget.bootstrap must be a boolean")
+    try:
+        _winget_bootstrap(winget_cfg)
+    except ManifestError as exc:
+        errors.append(str(exc))
 
     # --- linux nfpm + homebrew cask (declared-channel; both read .goreleaser) ---
     # alias_casks are intentionally NOT checked here: they live only in the

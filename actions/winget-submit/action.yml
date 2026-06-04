@@ -1,5 +1,5 @@
 name: Winget submit
-description: Submit an existing winget package update or bootstrap a first-time package submission.
+description: Submit an existing winget package update or bootstrap a first-time package submission on a Windows runner.
 inputs:
   package-id:
     description: "Winget PackageIdentifier, for example OpenCLICollective.codereview-cli"
@@ -30,6 +30,16 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Assert Windows runner
+      shell: bash
+      env:
+        RUNNER_OS_NAME: ${{ runner.os }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS_NAME" != "Windows" ]; then
+          echo "::error::winget-submit requires a Windows runner because wingetcreate.exe is Windows-only"
+          exit 1
+        fi
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
@@ -44,7 +54,7 @@ runs:
         REPO: ${{ inputs.repo }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        WINGET_GITHUB_TOKEN: ${{ inputs.github-token }}
         WINGET_TOKEN: ${{ inputs.winget-token }}
       run: |
         set -euo pipefail
@@ -55,5 +65,5 @@ runs:
           --repo "$REPO" \
           --working-dir "$WORKING_DIRECTORY" \
           --bootstrap "$BOOTSTRAP" \
-          --github-token "$GITHUB_TOKEN" \
+          --github-token "$WINGET_GITHUB_TOKEN" \
           --winget-token "$WINGET_TOKEN"

@@ -1,4 +1,6 @@
 import pathlib
+import hashlib
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -19,19 +21,19 @@ def test_package_id_to_winget_path():
 
 
 def test_select_mode_prefers_update_for_existing_package():
-    assert winget_submit.select_mode(package_exists=True, bootstrap=True) == winget_submit.MODE_UPDATE
+    assert winget_submit.select_mode(exists=True, bootstrap=True) == winget_submit.MODE_UPDATE
 
 
 def test_select_mode_missing_package_with_bootstrap_disabled():
     assert (
-        winget_submit.select_mode(package_exists=False, bootstrap=False)
+        winget_submit.select_mode(exists=False, bootstrap=False)
         == winget_submit.MODE_MISSING_BOOTSTRAP_DISABLED
     )
 
 
 def test_select_mode_missing_package_with_bootstrap_enabled():
     assert (
-        winget_submit.select_mode(package_exists=False, bootstrap=True)
+        winget_submit.select_mode(exists=False, bootstrap=True)
         == winget_submit.MODE_FIRST_SUBMISSION
     )
 
@@ -75,6 +77,64 @@ def456  cr_v1.2.3_windows_arm64.zip
     assert assets.x64.sha256 == "abc123"
     assert assets.arm64.url == "https://example.test/arm64.zip"
     assert assets.arm64.sha256 == "def456"
+
+
+def test_load_wingetcreate_asset_uses_github_release_digest():
+    def request_json(url, token):
+        return {
+            "assets": [
+                {
+                    "name": "wingetcreate.exe",
+                    "browser_download_url": "https://example.test/wingetcreate.exe",
+                    "digest": "sha256:" + "a" * 64,
+                }
+            ]
+        }
+
+    asset = winget_submit.load_wingetcreate_asset("github-token", request_json=request_json)
+
+    assert asset.url == "https://example.test/wingetcreate.exe"
+    assert asset.sha256 == "a" * 64
+
+
+def test_download_file_rejects_sha256_mismatch(tmp_path, monkeypatch):
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(winget_submit, "urlopen", lambda request, timeout: Response(b"not the expected bytes"))
+    dest = tmp_path / "wingetcreate.exe"
+
+    with pytest.raises(winget_submit.SubmitError, match="checksum"):
+        winget_submit.download_file("https://example.test/wingetcreate.exe", dest, 1, "a" * 64)
+
+    assert not dest.exists()
+
+
+def test_download_file_accepts_matching_sha256(tmp_path, monkeypatch):
+    payload = b"expected bytes"
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(winget_submit, "urlopen", lambda request, timeout: Response(payload))
+    dest = tmp_path / "wingetcreate.exe"
+
+    winget_submit.download_file(
+        "https://example.test/wingetcreate.exe",
+        dest,
+        1,
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    assert dest.read_bytes() == payload
 
 
 def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_path):
@@ -206,25 +266,37 @@ def test_run_submit_existing_package_uses_update_command_and_token_contexts(monk
         calls["package_exists"] = (package_id, github_token)
         return True
 
-    def download_file(url, dest, timeout_seconds):
-        calls["download_file"] = (url, pathlib.Path(dest).name, timeout_seconds)
+    def download_file(url, dest, timeout_seconds, expected_sha256):
+        calls["download_file"] = (url, pathlib.Path(dest).name, timeout_seconds, expected_sha256)
 
-    def run(command, check):
-        calls["run"] = (command, check)
+    def run(command, check, timeout):
+        calls["run"] = (command, check, timeout)
 
     monkeypatch.setattr(winget_submit, "load_release_assets", load_release_assets)
     monkeypatch.setattr(winget_submit, "resolve_windows_assets", resolve_windows_assets)
     monkeypatch.setattr(winget_submit, "package_exists", package_exists)
+    monkeypatch.setattr(
+        winget_submit,
+        "load_wingetcreate_asset",
+        lambda github_token: winget_submit.DownloadAsset("https://example.test/wingetcreate.exe", "a" * 64),
+    )
     monkeypatch.setattr(winget_submit, "download_file", download_file)
     monkeypatch.setattr(winget_submit.subprocess, "run", run)
 
     rc = winget_submit.run_submit(_args(bootstrap="true"))
 
     assert rc == 0
-    assert calls["load_release_assets"] == ("open-cli-collective/codereview-cli", "v1.2.3", "github-token")
     assert calls["package_exists"] == ("OpenCLICollective.codereview-cli", "github-token")
-    command, check = calls["run"]
+    assert calls["load_release_assets"] == ("open-cli-collective/codereview-cli", "v1.2.3", "github-token")
+    assert calls["download_file"] == (
+        "https://example.test/wingetcreate.exe",
+        "wingetcreate.exe",
+        winget_submit.WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS,
+        "a" * 64,
+    )
+    command, check, timeout = calls["run"]
     assert check is True
+    assert timeout == winget_submit.WINGETCREATE_COMMAND_TIMEOUT_SECONDS
     assert command[1:5] == ["update", "OpenCLICollective.codereview-cli", "--version", "1.2.3"]
     assert command[5:8] == ["--urls", assets.x64.url, assets.arm64.url]
     assert command[-2:] == ["--token", "winget-token"]
@@ -244,15 +316,20 @@ def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(mo
     monkeypatch.setattr(
         winget_submit,
         "download_file",
-        lambda url, dest, timeout_seconds: calls.setdefault("download_file", pathlib.Path(dest).name),
+        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", pathlib.Path(dest).name),
+    )
+    monkeypatch.setattr(
+        winget_submit,
+        "load_wingetcreate_asset",
+        lambda github_token: winget_submit.DownloadAsset("https://example.test/wingetcreate.exe", "a" * 64),
     )
 
     def render_bootstrap_manifests(package_id, version, working_dir, output_dir, assets):
         calls["render"] = (package_id, version, pathlib.Path(working_dir), pathlib.Path(output_dir).exists())
         return [pathlib.Path(output_dir) / f"{package_id}.yaml"]
 
-    def run(command, check):
-        calls["run"] = (command, check, pathlib.Path(command[-1]).exists())
+    def run(command, check, timeout):
+        calls["run"] = (command, check, timeout, pathlib.Path(command[-1]).exists())
 
     monkeypatch.setattr(winget_submit, "render_bootstrap_manifests", render_bootstrap_manifests)
     monkeypatch.setattr(winget_submit.subprocess, "run", run)
@@ -266,8 +343,9 @@ def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(mo
         pathlib.Path("."),
         True,
     )
-    command, check, rendered_dir_exists_during_submit = calls["run"]
+    command, check, timeout, rendered_dir_exists_during_submit = calls["run"]
     assert check is True
+    assert timeout == winget_submit.WINGETCREATE_COMMAND_TIMEOUT_SECONDS
     assert rendered_dir_exists_during_submit is True
     assert command[1] == "submit"
     assert command[2:5] == ["--prtitle", "New package: OpenCLICollective.codereview-cli version 1.2.3", "--token"]
@@ -288,9 +366,9 @@ def test_run_submit_missing_package_without_bootstrap_fails_before_download(monk
     monkeypatch.setattr(
         winget_submit,
         "download_file",
-        lambda url, dest, timeout_seconds: calls.setdefault("download_file", True),
+        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", True),
     )
-    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check: calls.setdefault("run", True))
+    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check, timeout: calls.setdefault("run", True))
 
     with pytest.raises(winget_submit.SubmitError, match="bootstrap is not true"):
         winget_submit.run_submit(_args(bootstrap="false"))
@@ -316,9 +394,9 @@ def test_run_submit_unverifiable_package_lookup_fails_closed(monkeypatch):
     monkeypatch.setattr(
         winget_submit,
         "download_file",
-        lambda url, dest, timeout_seconds: calls.setdefault("download_file", True),
+        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", True),
     )
-    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check: calls.setdefault("run", True))
+    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check, timeout: calls.setdefault("run", True))
 
     with pytest.raises(winget_submit.SubmitError, match="could not verify"):
         winget_submit.run_submit(_args(bootstrap="true"))
