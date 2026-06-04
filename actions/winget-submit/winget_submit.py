@@ -175,16 +175,17 @@ def render_bootstrap_manifests(
         raise SubmitError(f"winget bootstrap template missing: {', '.join(missing)}")
 
     output.mkdir(parents=True, exist_ok=True)
-    rendered: list[Path] = []
+    rendered: list[tuple[Path, str]] = []
     for src in [version_manifest, *locale_manifests, installer_manifest]:
         data = _load_manifest(src, package_id)
         data["PackageVersion"] = version
         if src == installer_manifest:
             _update_installer_manifest(data, assets)
         dest = output / src.name
-        dest.write_text(_dump_manifest(data, src), encoding="utf-8")
-        rendered.append(dest)
-    return rendered
+        rendered.append((dest, _dump_manifest(data, src)))
+    for dest, text in rendered:
+        dest.write_text(text, encoding="utf-8")
+    return [dest for dest, _ in rendered]
 
 
 def build_update_command(wingetcreate: Path, package_id: str, version: str, assets: WindowsAssets, token: str) -> list[str]:

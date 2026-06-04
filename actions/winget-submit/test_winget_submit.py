@@ -149,7 +149,7 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
             "PackageVersion": "0.0.0",
             "DefaultLocale": "en-US",
             "ManifestType": "version",
-            "ManifestVersion": "1.10.0",
+            "ManifestVersion": "1.9.0",
         },
     )
     _write_manifest(
@@ -162,7 +162,7 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
             "PackageName": "Code Review CLI",
             "ShortDescription": "Automated pull-request review CLI",
             "ManifestType": "defaultLocale",
-            "ManifestVersion": "1.10.0",
+            "ManifestVersion": "1.9.0",
         },
     )
     installer_path = winget_dir / f"{package_id}.installer.yaml"
@@ -185,7 +185,7 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
                 },
             ],
             "ManifestType": "installer",
-            "ManifestVersion": "1.10.0",
+            "ManifestVersion": "1.9.0",
         },
     )
     original_installer = installer_path.read_text()
@@ -223,15 +223,15 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
     rendered_installer_text = (rendered / f"{package_id}.installer.yaml").read_text()
     assert (
         rendered_version_text.splitlines()[0]
-        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json"
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json"
     )
     assert (
         rendered_locale_text.splitlines()[0]
-        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json"
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json"
     )
     assert (
         rendered_installer_text.splitlines()[0]
-        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json"
+        == "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json"
     )
     rendered_version = yaml.safe_load(rendered_version_text)
     rendered_locale = yaml.safe_load(rendered_locale_text)
@@ -246,7 +246,8 @@ def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_p
     assert installers["arm64"]["InstallerSha256"] == "b" * 64
 
 
-def test_render_bootstrap_manifests_requires_schema_metadata(tmp_path):
+@pytest.mark.parametrize("missing_key", ["ManifestType", "ManifestVersion"])
+def test_render_bootstrap_manifests_requires_schema_metadata(tmp_path, missing_key):
     package_id = "OpenCLICollective.codereview-cli"
     source = tmp_path / "tool"
     winget_dir = source / "packaging" / "winget"
@@ -274,28 +275,30 @@ def test_render_bootstrap_manifests_requires_schema_metadata(tmp_path):
             "ManifestVersion": "1.10.0",
         },
     )
-    _write_manifest(
-        winget_dir / f"{package_id}.installer.yaml",
-        {
-            "PackageIdentifier": package_id,
-            "PackageVersion": "0.0.0",
-            "InstallerType": "zip",
-            "Installers": [
-                {"Architecture": "x64", "InstallerUrl": "old-x64", "InstallerSha256": "old-x64-sha"},
-                {"Architecture": "arm64", "InstallerUrl": "old-arm64", "InstallerSha256": "old-arm64-sha"},
-            ],
-            "ManifestType": "installer",
-        },
-    )
+    installer = {
+        "PackageIdentifier": package_id,
+        "PackageVersion": "0.0.0",
+        "InstallerType": "zip",
+        "Installers": [
+            {"Architecture": "x64", "InstallerUrl": "old-x64", "InstallerSha256": "old-x64-sha"},
+            {"Architecture": "arm64", "InstallerUrl": "old-arm64", "InstallerSha256": "old-arm64-sha"},
+        ],
+        "ManifestType": "installer",
+        "ManifestVersion": "1.10.0",
+    }
+    installer.pop(missing_key)
+    _write_manifest(winget_dir / f"{package_id}.installer.yaml", installer)
 
-    with pytest.raises(winget_submit.SubmitError, match="ManifestVersion"):
+    rendered = tmp_path / "rendered"
+    with pytest.raises(winget_submit.SubmitError, match=missing_key):
         winget_submit.render_bootstrap_manifests(
             package_id=package_id,
             version="1.2.3",
             working_dir=source,
-            output_dir=tmp_path / "rendered",
+            output_dir=rendered,
             assets=_assets(),
         )
+    assert not any(rendered.iterdir())
 
 
 def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
