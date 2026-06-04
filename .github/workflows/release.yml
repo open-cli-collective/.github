@@ -324,17 +324,11 @@ jobs:
           $content = $content -replace 'CHECKSUM_ARM64_PLACEHOLDER', $env:ARM64_HASH
           Set-Content $script $content
       - name: Pack and push
-        shell: pwsh
-        working-directory: ${{ inputs.working-directory }}
-        env:
-          CHOCO_API_KEY: ${{ secrets.chocolatey-api-key }}
-        run: |
-          if (-not $env:CHOCO_API_KEY) { Write-Error "chocolatey-api-key secret is required"; exit 1 }
-          cd packaging/chocolatey
-          choco pack
-          $pkgs = @(Get-ChildItem *.nupkg)
-          if ($pkgs.Count -ne 1) { Write-Error "expected exactly one .nupkg, found $($pkgs.Count)"; exit 1 }
-          choco push $pkgs[0].Name --source https://push.chocolatey.org/ --key $env:CHOCO_API_KEY
+        uses: open-cli-collective/.github/actions/chocolatey-push@v1
+        with:
+          package-id: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.chocolatey.id }}
+          working-directory: ${{ inputs.working-directory }}
+          api-key: ${{ secrets.chocolatey-api-key }}
 
   # winget/linux are best-effort: Microsoft-hosted flakiness must not gate the
   # binary/Homebrew artifacts. Failure surfaces in the step summary.

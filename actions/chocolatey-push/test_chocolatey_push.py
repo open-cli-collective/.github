@@ -1,0 +1,193 @@
+from types import SimpleNamespace
+
+import pytest
+
+import chocolatey_push
+
+
+EMPTY_FEED = """\
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="text">Packages</title>
+</feed>
+"""
+
+ENTRY_FEED = """\
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title>codereview-cli</title></entry>
+</feed>
+"""
+
+
+def test_pack_and_push_success(tmp_path):
+    calls = []
+
+    def runner(command, cwd, text, capture_output):
+        calls.append(command)
+        if command == ["choco", "pack"]:
+            (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
+            return _result(0, stdout="packed\n")
+        return _result(0, stdout="pushed\n")
+
+    rc = chocolatey_push.pack_and_push(
+        package_id="codereview-cli",
+        working_dir=_working_dir(tmp_path),
+        api_key="key",
+        command_runner=runner,
+    )
+
+    assert rc == 0
+    assert calls[0] == ["choco", "pack"]
+    assert calls[1][:3] == ["choco", "push", "codereview-cli.1.0.0.nupkg"]
+
+
+def test_pack_and_push_requires_api_key(tmp_path):
+    with pytest.raises(chocolatey_push.PushError, match="chocolatey-api-key"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="",
+            command_runner=lambda command, cwd, text, capture_output: _result(0),
+        )
+
+
+def test_pack_failure_fails_release(tmp_path):
+    def runner(command, cwd, text, capture_output):
+        return _result(1, stderr="pack failed")
+
+    with pytest.raises(chocolatey_push.PushError, match="choco pack failed"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=runner,
+        )
+
+
+def test_non_forbidden_push_failure_fails_release(tmp_path):
+    def runner(command, cwd, text, capture_output):
+        if command == ["choco", "pack"]:
+            (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
+            return _result(0)
+        return _result(1, stderr="500 server error")
+
+    with pytest.raises(chocolatey_push.PushError, match="choco push failed"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=runner,
+        )
+
+
+def test_forbidden_pending_first_submission_succeeds_with_warning(tmp_path):
+    summary = tmp_path / "summary.md"
+
+    rc = chocolatey_push.pack_and_push(
+        package_id="codereview-cli",
+        working_dir=_working_dir(tmp_path),
+        api_key="key",
+        command_runner=_forbidden_push_runner(tmp_path),
+        http_get=_http_get({"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, EMPTY_FEED)}),
+        summary_path=str(summary),
+    )
+
+    assert rc == 0
+    assert "was not accepted for this release" in summary.read_text()
+
+
+def test_forbidden_visible_package_fails_release(tmp_path):
+    with pytest.raises(chocolatey_push.PushError, match="pending first-submission"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=_forbidden_push_runner(tmp_path),
+            http_get=_http_get(
+                {"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, ENTRY_FEED)}
+            ),
+        )
+
+
+def test_forbidden_package_not_found_fails_release(tmp_path):
+    with pytest.raises(chocolatey_push.PushError, match="pending first-submission"):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=_forbidden_push_runner(tmp_path),
+            http_get=_http_get({"/package/codereview-cli": (404, "")}),
+        )
+
+
+@pytest.mark.parametrize(
+    "responses, error",
+    [
+        ({"/package/codereview-cli": (503, "")}, "package endpoint"),
+        ({"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (503, "")}, "listing"),
+        (
+            {"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, "not xml")},
+            "malformed",
+        ),
+        (
+            {"/package/codereview-cli": (200, "nupkg"), "/Packages()?": (200, "<error />")},
+            "Atom feed",
+        ),
+    ],
+)
+def test_forbidden_probe_uncertainty_fails_closed(tmp_path, responses, error):
+    with pytest.raises(chocolatey_push.ProbeError, match=error):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=_working_dir(tmp_path),
+            api_key="key",
+            command_runner=_forbidden_push_runner(tmp_path),
+            http_get=_http_get(responses),
+        )
+
+
+def test_probe_package_state_builds_expected_urls():
+    seen = []
+
+    def http_get(url):
+        seen.append(url)
+        if "/package/codereview-cli" in url:
+            return chocolatey_push.HttpResponse(200, "nupkg")
+        return chocolatey_push.HttpResponse(200, EMPTY_FEED)
+
+    state = chocolatey_push.probe_package_state("codereview-cli", http_get=http_get)
+
+    assert state.pending_first_submission is True
+    assert seen[0] == "https://community.chocolatey.org/api/v2/package/codereview-cli"
+    assert "%24filter=Id+eq+%27codereview-cli%27" in seen[1]
+
+
+def _working_dir(tmp_path):
+    work = tmp_path / "repo"
+    (work / "packaging" / "chocolatey").mkdir(parents=True)
+    return work
+
+
+def _forbidden_push_runner(tmp_path):
+    def runner(command, cwd, text, capture_output):
+        if command == ["choco", "pack"]:
+            (cwd / "codereview-cli.1.0.0.nupkg").write_text("pkg")
+            return _result(0, stdout="packed\n")
+        return _result(1, stderr="Response status code does not indicate success: 403 (Forbidden).")
+
+    return runner
+
+
+def _http_get(responses):
+    def http_get(url):
+        for needle, (status, body) in responses.items():
+            if needle in url:
+                return chocolatey_push.HttpResponse(status, body)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    return http_get
+
+
+def _result(returncode, stdout="", stderr=""):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
