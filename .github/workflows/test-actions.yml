@@ -171,6 +171,21 @@ jobs:
         shell: bash
         working-directory: actions/winget-submit
 
+  # chocolatey-push helper logic: package push and first-submission moderation
+  # detection.
+  chocolatey-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pytest>=8,<9" "defusedxml==0.7.1"
+        shell: bash
+      - run: python -m pytest -q
+        shell: bash
+        working-directory: actions/chocolatey-push
+
   # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
   identity-unit:
     runs-on: ubuntu-latest

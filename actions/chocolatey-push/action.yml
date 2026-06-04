@@ -1,0 +1,30 @@
+name: Chocolatey Pack and Push
+description: Pack and push Chocolatey packages, including first-submission moderation handling.
+inputs:
+  package-id:
+    description: Chocolatey package id.
+    required: true
+  working-directory:
+    description: Repository-relative tool working directory.
+    required: false
+    default: "."
+  api-key:
+    description: Chocolatey API key.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      env:
+        CHOCO_API_KEY: ${{ inputs.api-key }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        python -m pip install "defusedxml==0.7.1"
+        python "$GITHUB_ACTION_PATH/chocolatey_push.py" push \
+          --package-id "$PACKAGE_ID" \
+          --working-directory "$WORKING_DIRECTORY" \
+          --api-key-env CHOCO_API_KEY
