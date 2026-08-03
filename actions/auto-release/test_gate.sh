@@ -68,5 +68,32 @@ bash gate.sh validate-version "3"     >/dev/null 2>&1 && bad "reject 3"      || 
 [ "$(bash gate.sh compute-tag v 3.1 150)" = "v3.1.150" ]        && ok "tag v"     || bad "tag v"
 [ "$(bash gate.sh compute-tag jtk-v 1.0 42)" = "jtk-v1.0.42" ]  && ok "tag jtk-v" || bad "tag jtk-v"
 
+# --- release commit gate: release, intentional skip, and fail-loud invalid subject ---
+CCHECK="../conventional-commit/check.sh"
+check_rc() {
+  local mode="$1" message="$2" output rc
+  if output="$(bash "$CCHECK" "$mode" "$message" 2>&1)"; then rc=0; else rc=$?; fi
+  printf '%s\n' "$rc|$output"
+}
+expect_rc() {
+  local label="$1" expected="$2" result rc
+  result="$(check_rc "$3" "$4")"
+  rc="${result%%|*}"
+  if [ "$rc" -eq "$expected" ]; then ok "$label"; else bad "$label (rc=$rc)"; fi
+}
+expect_rc "feat release" 0 release-gate "feat: ship it"
+expect_rc "fix release" 0 release-gate "fix(scope)!: stop the bug"
+expect_rc "docs skip" 1 release-gate "docs: update the guide"
+expect_rc "refactor skip" 1 release-gate "refactor(core): simplify the path"
+expect_rc "ci skip" 1 release-gate "ci: update automation"
+invalid="$(check_rc release-gate "Fix scoped reviewer workspace path validation (#533)")"
+invalid_rc="${invalid%%|*}"
+invalid_output="${invalid#*|}"
+case "$invalid_output" in
+  *"invalid landed commit subject; refusing to skip auto-release"*)
+    [ "$invalid_rc" -eq 2 ] && ok "invalid landed subject fails loudly" || bad "invalid landed subject rc=$invalid_rc" ;;
+  *) bad "invalid landed subject message" ;;
+esac
+
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "all gate.sh tests passed"; else echo "$fails failed"; exit 1; fi

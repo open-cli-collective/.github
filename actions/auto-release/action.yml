@@ -94,7 +94,7 @@ runs:
           esac
         fi
 
-        # --- commit gate: subject line only; 0=match, 1=no-match, >1=error ---
+        # --- commit gate: 0=release, 1=valid non-release skip, >1=error ---
         subject="${COMMIT_MESSAGE%%$'\n'*}"
         set +e
         cc_out="$(bash "$ccheck" release-gate "$subject" 2>&1)"   # capture, don't suppress
@@ -102,7 +102,7 @@ runs:
         set -e
         case "$rc" in
           0) commit_ok=true ;;
-          1) commit_ok=false ;;                       # no-match: cc_out is the expected ::error::, ignore it
+          1) commit_ok=false ;;                       # valid conventional non-release subject: skip
           *) echo "$cc_out"; echo "::error::conventional-commit check failed (rc=$rc)"; exit 1 ;;
         esac
 
