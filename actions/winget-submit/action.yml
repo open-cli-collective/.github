@@ -21,6 +21,14 @@ inputs:
     description: "Allow first-time package submission if the winget package does not exist"
     required: false
     default: "false"
+  x64-marker:
+    description: "Substring used to identify the x64 release asset"
+    required: false
+    default: "windows_amd64.zip"
+  arm64-marker:
+    description: "Substring used to identify the arm64 release asset"
+    required: false
+    default: "windows_arm64.zip"
   github-token:
     description: "GitHub token for release asset download and winget-pkgs existence lookup"
     required: true
@@ -54,6 +62,8 @@ runs:
         REPO: ${{ inputs.repo }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
+        X64_MARKER: ${{ inputs.x64-marker }}
+        ARM64_MARKER: ${{ inputs.arm64-marker }}
         WINGET_GITHUB_TOKEN: ${{ inputs.github-token }}
         WINGET_TOKEN: ${{ inputs.winget-token }}
       run: |
@@ -65,5 +75,7 @@ runs:
           --repo "$REPO" \
           --working-dir "$WORKING_DIRECTORY" \
           --bootstrap "$BOOTSTRAP" \
+          --x64-marker "$X64_MARKER" \
+          --arm64-marker "$ARM64_MARKER" \
           --github-token "$WINGET_GITHUB_TOKEN" \
           --winget-token "$WINGET_TOKEN"
