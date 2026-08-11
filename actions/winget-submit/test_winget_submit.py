@@ -79,6 +79,127 @@ def456  cr_v1.2.3_windows_arm64.zip
     assert assets.arm64.sha256 == "def456"
 
 
+def test_resolve_windows_assets_uses_configured_markers():
+    checksums = """\
+abc123  Retune-0.2.0-windows-x64-setup.exe
+def456  Retune-0.2.0-windows-arm64-setup.exe
+"""
+    release_assets = {
+        "Retune-0.2.0-windows-x64-setup.exe": "https://example.test/x64.exe",
+        "Retune-0.2.0-windows-arm64-setup.exe": "https://example.test/arm64.exe",
+    }
+
+    assets = winget_submit.resolve_windows_assets(
+        checksums,
+        release_assets,
+        x64_marker="windows-x64-setup.exe",
+        arm64_marker="windows-arm64-setup.exe",
+    )
+
+    assert assets.x64.name == "Retune-0.2.0-windows-x64-setup.exe"
+    assert assets.x64.url == "https://example.test/x64.exe"
+    assert assets.arm64.name == "Retune-0.2.0-windows-arm64-setup.exe"
+    assert assets.arm64.url == "https://example.test/arm64.exe"
+
+
+def test_resolve_windows_assets_rejects_asset_matching_both_markers():
+    with pytest.raises(winget_submit.SubmitError, match="both x64 and arm64"):
+        winget_submit.resolve_windows_assets(
+            "abc123  Retune-windows-x64-setup.exe\n",
+            {"Retune-windows-x64-setup.exe": "https://example.test/x64.exe"},
+            x64_marker="Retune",
+            arm64_marker="windows",
+        )
+
+
+def test_resolve_windows_assets_rejects_duplicate_architecture_matches():
+    with pytest.raises(winget_submit.SubmitError, match="multiple x64"):
+        winget_submit.resolve_windows_assets(
+            "abc123  first_windows_amd64.zip\n"
+            "def456  second_windows_amd64.zip\n"
+            "ghi789  only_windows_arm64.zip\n",
+            {
+                "first_windows_amd64.zip": "https://example.test/first-x64.zip",
+                "second_windows_amd64.zip": "https://example.test/second-x64.zip",
+                "only_windows_arm64.zip": "https://example.test/arm64.zip",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("x64_marker", "arm64_marker", "message"),
+    [
+        ("", "windows-arm64-setup.exe", "x64 asset marker"),
+        ("windows-x64-setup.exe", "", "arm64 asset marker"),
+        ("same", "same", "distinct"),
+    ],
+)
+def test_resolve_windows_assets_rejects_malformed_markers(x64_marker, arm64_marker, message):
+    with pytest.raises(winget_submit.SubmitError, match=message):
+        winget_submit.resolve_windows_assets(
+            "abc123  Retune-0.2.0-windows-x64-setup.exe\n"
+            "def456  Retune-0.2.0-windows-arm64-setup.exe\n",
+            {
+                "Retune-0.2.0-windows-x64-setup.exe": "https://example.test/x64.exe",
+                "Retune-0.2.0-windows-arm64-setup.exe": "https://example.test/arm64.exe",
+            },
+            x64_marker=x64_marker,
+            arm64_marker=arm64_marker,
+        )
+
+
+def test_action_declares_defaults_and_forwards_asset_markers():
+    action = yaml.safe_load(pathlib.Path(__file__).with_name("action.yml").read_text())
+    inputs = action["inputs"]
+    submit_step = action["runs"]["steps"][-1]
+
+    assert inputs["x64-marker"]["required"] is False
+    assert inputs["x64-marker"]["default"] == winget_submit.DEFAULT_X64_MARKER
+    assert inputs["arm64-marker"]["required"] is False
+    assert inputs["arm64-marker"]["default"] == winget_submit.DEFAULT_ARM64_MARKER
+    assert submit_step["env"]["X64_MARKER"] == "${{ inputs.x64-marker }}"
+    assert submit_step["env"]["ARM64_MARKER"] == "${{ inputs.arm64-marker }}"
+    assert '--x64-marker "$X64_MARKER"' in submit_step["run"]
+    assert '--arm64-marker "$ARM64_MARKER"' in submit_step["run"]
+
+
+def test_cli_parses_configured_asset_markers(monkeypatch):
+    received = {}
+
+    def capture_args(args):
+        received.update(vars(args))
+        return 0
+
+    monkeypatch.setattr(winget_submit, "run_submit", capture_args)
+
+    assert (
+        winget_submit.main(
+            [
+                "submit",
+                "--package-id",
+                "OpenCLICollective.Retune",
+                "--version",
+                "0.2.0",
+                "--final-tag",
+                "v0.2.0",
+                "--repo",
+                "open-cli-collective/Retune",
+                "--x64-marker",
+                "windows-x64-setup.exe",
+                "--arm64-marker",
+                "windows-arm64-setup.exe",
+                "--github-token",
+                "github-token",
+                "--winget-token",
+                "winget-token",
+            ]
+        )
+        == 0
+    )
+    assert received["x64_marker"] == "windows-x64-setup.exe"
+    assert received["arm64_marker"] == "windows-arm64-setup.exe"
+
+
 def test_load_wingetcreate_asset_uses_github_release_digest():
     def request_json(url, token):
         return {
@@ -325,7 +446,7 @@ def test_run_submit_existing_package_uses_update_command_and_token_contexts(monk
         calls["load_release_assets"] = (repo, final_tag, github_token)
         return "checksums", {"asset": "url"}
 
-    def resolve_windows_assets(checksums_text, release_assets):
+    def resolve_windows_assets(checksums_text, release_assets, **_markers):
         calls["resolve_windows_assets"] = (checksums_text, release_assets)
         return assets
 
@@ -378,7 +499,11 @@ def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(mo
         "load_release_assets",
         lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
     )
-    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: assets)
+    monkeypatch.setattr(
+        winget_submit,
+        "resolve_windows_assets",
+        lambda checksums, release_assets, **_markers: assets,
+    )
     monkeypatch.setattr(winget_submit, "package_exists", lambda package_id, github_token: False)
     monkeypatch.setattr(
         winget_submit,

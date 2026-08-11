@@ -26,6 +26,8 @@ HTTP_TIMEOUT_SECONDS = 30
 WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS = 60
 WINGETCREATE_COMMAND_TIMEOUT_SECONDS = 300
 WINGET_MANIFEST_TYPES = {"version", "installer", "defaultLocale", "locale"}
+DEFAULT_X64_MARKER = "windows_amd64.zip"
+DEFAULT_ARM64_MARKER = "windows_arm64.zip"
 
 
 class SubmitError(Exception):
@@ -127,19 +129,41 @@ def load_wingetcreate_asset(github_token: str, request_json=None) -> DownloadAss
     raise SubmitError("wingetcreate.exe asset not found in microsoft/winget-create latest release")
 
 
-def resolve_windows_assets(checksums_text: str, release_assets: dict[str, str]) -> WindowsAssets:
+def resolve_windows_assets(
+    checksums_text: str,
+    release_assets: dict[str, str],
+    x64_marker: str = DEFAULT_X64_MARKER,
+    arm64_marker: str = DEFAULT_ARM64_MARKER,
+) -> WindowsAssets:
+    if not isinstance(x64_marker, str) or not x64_marker.strip():
+        raise SubmitError("x64 asset marker is required")
+    if not isinstance(arm64_marker, str) or not arm64_marker.strip():
+        raise SubmitError("arm64 asset marker is required")
+    x64_marker = x64_marker.strip()
+    arm64_marker = arm64_marker.strip()
+    if x64_marker == arm64_marker:
+        raise SubmitError("x64 and arm64 asset markers must be distinct")
+
     found: dict[str, WindowsAsset] = {}
     for raw in checksums_text.splitlines():
         parts = raw.strip().split()
         if len(parts) < 2:
             continue
         sha256, name = parts[0], parts[-1].lstrip("*")
-        if "windows_amd64.zip" in name:
-            arch = "x64"
-        elif "windows_arm64.zip" in name:
-            arch = "arm64"
-        else:
+        matches = []
+        if x64_marker in name:
+            matches.append("x64")
+        if arm64_marker in name:
+            matches.append("arm64")
+        if not matches:
             continue
+        if len(matches) > 1:
+            raise SubmitError(f"release asset {name} matches both x64 and arm64 markers")
+        arch = matches[0]
+        if arch in found:
+            raise SubmitError(
+                f"multiple {arch} release assets matched markers: {found[arch].name}, {name}"
+            )
         url = release_assets.get(name)
         if not url:
             raise SubmitError(f"release asset {name} listed in checksums.txt was not found")
@@ -259,7 +283,12 @@ def run_submit(args) -> int:
         )
 
     checksums_text, release_assets = load_release_assets(args.repo, args.final_tag, args.github_token)
-    assets = resolve_windows_assets(checksums_text, release_assets)
+    assets = resolve_windows_assets(
+        checksums_text,
+        release_assets,
+        x64_marker=getattr(args, "x64_marker", DEFAULT_X64_MARKER),
+        arm64_marker=getattr(args, "arm64_marker", DEFAULT_ARM64_MARKER),
+    )
     wingetcreate_asset = load_wingetcreate_asset(args.github_token)
     wingetcreate = Path.cwd() / "wingetcreate.exe"
     download_file(
@@ -420,6 +449,8 @@ def main(argv: list[str] | None = None) -> int:
     submit.add_argument("--repo", required=True)
     submit.add_argument("--working-dir", default=".")
     submit.add_argument("--bootstrap", default="false")
+    submit.add_argument("--x64-marker", default=DEFAULT_X64_MARKER)
+    submit.add_argument("--arm64-marker", default=DEFAULT_ARM64_MARKER)
     submit.add_argument("--github-token", required=True)
     submit.add_argument("--winget-token", required=True)
     args = parser.parse_args(argv)
