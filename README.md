@@ -76,8 +76,9 @@ binaries:
 
 `repo`, `goreleaser_config`, `version_file`, and `tag` remain top-level. For a
 multi-binary manifest, every GoReleaser build needs an `id`, and each archive,
-nfpm, and Homebrew cask must use `ids` or `builds` to select builds belonging
-to one binary. Multi-binary Chocolatey packages live under
+and nfpm must use `ids` or `builds` to select builds belonging to one binary.
+Each Homebrew cask must use `ids` to select archives belonging to one binary.
+Multi-binary Chocolatey packages live under
 `packaging/chocolatey/<id>/`; the single-binary flat layout is unchanged.
 
 Call either reusable workflow with `manifest-path` and `working-directory`
