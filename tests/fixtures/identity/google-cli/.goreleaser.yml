@@ -1,0 +1,20 @@
+builds:
+  - {id: gro, binary: gro}
+  - {id: gro-darwin, binary: gro}
+  - {id: grw, binary: grw}
+  - {id: grw-darwin, binary: grw}
+archives:
+  - ids: [gro, gro-darwin]
+    name_template: "gro_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - ids: [grw, grw-darwin]
+    name_template: "grw_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+nfpms:
+  - ids: [gro]
+    package_name: google-readonly
+  - ids: [grw]
+    package_name: grw
+homebrew_casks:
+  - ids: [gro-darwin]
+    name: gro
+  - ids: [grw-darwin]
+    name: grw

@@ -206,7 +206,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fixture: [slck, gro, nrq, jtk]
+        fixture: [slck, gro, nrq, jtk, google-cli]
     steps:
       - uses: actions/checkout@v4
       - uses: ./actions/identity-check
@@ -244,7 +244,7 @@ jobs:
         env:
           IDJSON: ${{ steps.export.outputs.identity-json }}
         run: |
-          echo "$IDJSON" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['binary']=='jtk'; assert d['tag']['prefix']=='jtk-v'; print('ok export-json')"
+          echo "$IDJSON" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [b['name'] for b in d['binaries']]==['jtk']; assert d['binaries'][0]['packages']['chocolatey']['dir']=='packaging/chocolatey'; assert d['tag']['prefix']=='jtk-v'; print('ok export-json')"
       # validate-and-export: both halves in one call (the mode #8 release uses).
       - id: both
         uses: ./actions/identity-check
@@ -257,7 +257,7 @@ jobs:
         env:
           IDJSON: ${{ steps.both.outputs.identity-json }}
         run: |
-          echo "$IDJSON" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['binary']=='slck'; print('ok validate-and-export')"
+          echo "$IDJSON" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [b['name'] for b in d['binaries']]==['slck']; print('ok validate-and-export')"
       - name: require-manifest=false skips when absent
         uses: ./actions/identity-check
         with:

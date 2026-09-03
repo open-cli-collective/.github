@@ -59,6 +59,7 @@ def pack_and_push(
     *,
     package_id: str,
     working_dir: str | Path,
+    package_dir: str | Path = "packaging/chocolatey",
     api_key: str,
     command_runner=None,
     http_get=None,
@@ -67,7 +68,7 @@ def pack_and_push(
     if not api_key:
         raise PushError("chocolatey-api-key secret is required")
 
-    choco_dir = Path(working_dir) / "packaging" / "chocolatey"
+    choco_dir = Path(working_dir) / package_dir
     pack = run_command(["choco", "pack"], choco_dir, command_runner)
     _print_command_output(pack)
     if pack.returncode != 0:
@@ -208,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     push = sub.add_parser("push")
     push.add_argument("--package-id", required=True)
     push.add_argument("--working-directory", default=".")
+    push.add_argument("--package-directory", default="packaging/chocolatey")
     push.add_argument("--api-key-env", default="CHOCO_API_KEY")
     args = parser.parse_args(argv)
 
@@ -216,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             return pack_and_push(
                 package_id=args.package_id,
                 working_dir=args.working_directory,
+                package_dir=args.package_directory,
                 api_key=os.environ.get(args.api_key_env, ""),
             )
     except (PushError, ProbeError) as exc:

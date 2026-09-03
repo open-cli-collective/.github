@@ -9,15 +9,11 @@ inputs:
     description: "goreleaser dist directory (holds artifacts.json + binaries)"
     required: false
     default: dist
-  keychain-probe:
-    description: "the manifest's keychain_probe spec as JSON (from identity-json)"
+  binaries:
+    description: "JSON array of {name,keychain_probe} entries"
     required: true
   expected-leaf:
     description: "pinned signing-cert leaf SHA-1 (MACOS_CERT_LEAF_SHA). Empty = skip the signature check (unsigned / opt-out caller)."
-    required: false
-    default: ""
-  identifier:
-    description: "expected code-signing identifier, e.g. org.open-cli-collective.<binary>"
     required: false
     default: ""
 runs:
@@ -27,10 +23,9 @@ runs:
       shell: bash
       env:
         DIST: ${{ inputs.dist-path }}
-        PROBE: ${{ inputs.keychain-probe }}
+        BINARIES: ${{ inputs.binaries }}
         ACTION_PATH: ${{ github.action_path }}
         EXPECTED_LEAF: ${{ inputs.expected-leaf }}
-        IDENTIFIER: ${{ inputs.identifier }}
       run: |
         set -euo pipefail
         gate="$ACTION_PATH/darwin-gate.sh"
@@ -38,29 +33,22 @@ runs:
         art="$DIST/artifacts.json"
         [ -f "$art" ] || { echo "::error::artifacts.json not found at $art"; exit 1; }
 
-        # 1. artifact sanity (one archive per darwin arch, both binaries present)
-        bash "$gate" check-artifacts "$art"
+        names="$(printf '%s' "$BINARIES" | jq -c '[.[].name]')"
+        bash "$gate" check-artifacts "$art" "$names"
 
-        # 2. resolve the two darwin binary paths from artifacts.json
-        arm="$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="arm64")][0].path' "$art")"
-        amd="$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="amd64")][0].path' "$art")"
-        [ -n "$arm" ] && [ "$arm" != null ] && [ -f "$arm" ] || { echo "::error::arm64 darwin binary path not resolved"; exit 1; }
-        [ -n "$amd" ] && [ "$amd" != null ] && [ -f "$amd" ] || { echo "::error::amd64 darwin binary path not resolved"; exit 1; }
-
-        # 3. Mach-O arch + Security.framework linkage (cgo signal)
-        bash "$gate" check-macho "$arm" "$amd"
-
-        # 4. functional probe: seed config, run the arm64 binary (native on the
-        #    Apple-Silicon runner), assert it selected the keychain backend.
-        #    darwin-gate.sh probe takes the spec as a JSON string.
-        bash "$gate" probe "$PROBE" "$arm"
-
-        # 5. code-signing designated-requirement check. Self-gated: runs only when a
-        #    pinned leaf is supplied (i.e. the caller passed the cert secrets). Skipped
-        #    otherwise so an opt-out / rolling-v1 caller's unsigned release still passes.
-        if [ -n "$EXPECTED_LEAF" ]; then
-          bash "$gate" check-signature "$arm" "$amd" "$EXPECTED_LEAF" "$IDENTIFIER"
-        else
-          echo "::notice::no expected-leaf — skipping code-signing check (unsigned release)"
-        fi
+        printf '%s' "$BINARIES" | jq -c '.[]' | while IFS= read -r binary; do
+          name="$(printf '%s' "$binary" | jq -r '.name')"
+          probe="$(printf '%s' "$binary" | jq -c '.keychain_probe')"
+          arm="$(jq -r --arg name "$name" '[.[]|select(.type=="Binary" and .name==$name and .goos=="darwin" and .goarch=="arm64")][0].path' "$art")"
+          amd="$(jq -r --arg name "$name" '[.[]|select(.type=="Binary" and .name==$name and .goos=="darwin" and .goarch=="amd64")][0].path' "$art")"
+          [ -n "$arm" ] && [ "$arm" != null ] && [ -f "$arm" ] || { echo "::error::$name arm64 darwin binary path not resolved"; exit 1; }
+          [ -n "$amd" ] && [ "$amd" != null ] && [ -f "$amd" ] || { echo "::error::$name amd64 darwin binary path not resolved"; exit 1; }
+          bash "$gate" check-macho "$arm" "$amd"
+          bash "$gate" probe "$probe" "$arm"
+          if [ -n "$EXPECTED_LEAF" ]; then
+            bash "$gate" check-signature "$arm" "$amd" "$EXPECTED_LEAF" "org.open-cli-collective.$name"
+          else
+            echo "::notice::no expected-leaf — skipping $name code-signing check (unsigned release)"
+          fi
+        done
         echo "::notice::CGO-darwin gate passed"

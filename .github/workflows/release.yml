@@ -3,7 +3,7 @@ name: Release (reusable)
 # Reusable workflow: triggered by the caller on a release tag (from auto-release,
 # #7). Builds with GoReleaser on macOS (CGO darwin can't cross-compile), gates the
 # Keychain backend, publishes the GitHub release, then fans out to the packaging
-# channels the manifest declares. Identity (tag prefix, binary, channels, probe)
+# channels the manifest declares. Identity (tag prefix, binaries, channels, probes)
 # comes from packaging/identity.yml via identity-check — a repo declares it once.
 # See cli-common distribution.md / release.md.
 #
@@ -68,6 +68,12 @@ jobs:
       has-chocolatey: ${{ steps.meta.outputs.has-chocolatey }}
       has-linux: ${{ steps.meta.outputs.has-linux }}
       has-keychain: ${{ steps.meta.outputs.has-keychain }}
+      binaries: ${{ steps.meta.outputs.binaries }}
+      homebrew-matrix: ${{ steps.meta.outputs.homebrew-matrix }}
+      chocolatey-matrix: ${{ steps.assets.outputs.chocolatey-matrix }}
+      winget-matrix: ${{ steps.assets.outputs.winget-matrix }}
+      linux-matrix: ${{ steps.meta.outputs.linux-matrix }}
+      keychain-matrix: ${{ steps.meta.outputs.keychain-matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,7 +112,12 @@ jobs:
           else
             current_tag="$final_tag"; needs_rename=false
           fi
-          has() { [ "$(printf '%s' "$IDJSON" | jq -r "$1")" != "null" ] && echo true || echo false; }
+          matrix() { printf '%s' "$IDJSON" | jq -c "$1"; }
+          homebrew="$(matrix '[.binaries[] | select(.packages.homebrew.canonical_cask != null) | {name, canonical_cask: .packages.homebrew.canonical_cask, alias_casks: (.packages.homebrew.alias_casks | join(" "))}]')"
+          chocolatey="$(matrix '[.binaries[] | select(.packages.chocolatey.id != null) | {name, id: .packages.chocolatey.id, dir: .packages.chocolatey.dir}]')"
+          winget="$(matrix '[.binaries[] | select(.packages.winget.id != null) | {name, id: .packages.winget.id, bootstrap: .packages.winget.bootstrap}]')"
+          linux="$(matrix '[.binaries[] | select(.packages.linux.package_name != null) | {name, package_name: .packages.linux.package_name}]')"
+          keychain="$(matrix '[.binaries[] | select(.keychain_probe != null) | {name, keychain_probe}]')"
           {
             # re-emit the normalized manifest as a single compact line for downstream jobs
             echo "identity-json=$(printf '%s' "$IDJSON" | jq -c .)"
@@ -115,11 +126,17 @@ jobs:
             echo "goreleaser-config=$(printf '%s' "$IDJSON" | jq -r '.goreleaser_config')"
             echo "current-tag=$current_tag"
             echo "needs-rename=$needs_rename"
-            echo "has-homebrew=$(has '.packages.homebrew.canonical_cask')"
-            echo "has-winget=$(has '.packages.winget.id')"
-            echo "has-chocolatey=$(has '.packages.chocolatey.id')"
-            echo "has-linux=$(has '.packages.linux.package_name')"
-            echo "has-keychain=$(has '.keychain_probe')"
+            echo "binaries=$(printf '%s' "$IDJSON" | jq -r '[.binaries[].name] | join(" ")')"
+            echo "homebrew-matrix=$homebrew"
+            echo "chocolatey-base-matrix=$chocolatey"
+            echo "winget-base-matrix=$winget"
+            echo "linux-matrix=$linux"
+            echo "keychain-matrix=$keychain"
+            echo "has-homebrew=$(jq -nr --argjson m "$homebrew" '$m | length > 0')"
+            echo "has-winget=$(jq -nr --argjson m "$winget" '$m | length > 0')"
+            echo "has-chocolatey=$(jq -nr --argjson m "$chocolatey" '$m | length > 0')"
+            echo "has-linux=$(jq -nr --argjson m "$linux" '$m | length > 0')"
+            echo "has-keychain=$(jq -nr --argjson m "$keychain" '$m | length > 0')"
           } >> "$GITHUB_OUTPUT"
           echo "release $final_tag (version $version, prefix '$prefix', current-tag $current_tag)"
 
@@ -160,12 +177,34 @@ jobs:
           cert-password: ${{ secrets.macos-cert-password }}
           cert-cn: ${{ secrets.macos-cert-cn }}
           cert-leaf-sha: ${{ secrets.macos-cert-leaf-sha }}
-          binary: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
 
       - name: Build (snapshot, no publish)
         env:
           GORELEASER_CURRENT_TAG: ${{ steps.meta.outputs.current-tag }}
         run: goreleaser release --snapshot --clean -f "${{ steps.meta.outputs.goreleaser-config }}"
+
+      - id: assets
+        name: Resolve per-binary Windows archives
+        shell: bash
+        env:
+          CHOCOLATEY: ${{ steps.meta.outputs.chocolatey-base-matrix }}
+          WINGET: ${{ steps.meta.outputs.winget-base-matrix }}
+        run: |
+          set -euo pipefail
+          enrich() {
+            printf '%s' "$1" | jq -c --slurpfile artifacts dist/artifacts.json '
+              def owns($name):
+                (.extra.ID // "") == $name or
+                ((.extra.Binaries // []) | index($name) != null);
+              def asset($name; $arch):
+                [$artifacts[0][] | select(.type == "Archive" and .goos == "windows" and .goarch == $arch and owns($name)) | .name]
+                | if length == 1 then .[0] else error("expected exactly one windows/" + $arch + " archive for " + $name + "; got " + (length|tostring)) end;
+              map(. + {x64_asset: asset(.name; "amd64"), arm64_asset: asset(.name; "arm64")})'
+          }
+          {
+            echo "chocolatey-matrix=$(enrich "$CHOCOLATEY")"
+            echo "winget-matrix=$(enrich "$WINGET")"
+          } >> "$GITHUB_OUTPUT"
 
       # CGO-darwin pre-publish gate — prove the Keychain backend is present on
       # the snapshot artifacts BEFORE we publish. Skipped for tools that declare
@@ -175,10 +214,9 @@ jobs:
         uses: open-cli-collective/.github/actions/darwin-gate@v1
         with:
           dist-path: dist
-          keychain-probe: ${{ toJSON(fromJSON(steps.meta.outputs.identity-json).keychain_probe) }}
+          binaries: ${{ steps.meta.outputs.keychain-matrix }}
           # self-gated inside darwin-gate: empty leaf (no cert secret) → signature check skipped
           expected-leaf: ${{ secrets.macos-cert-leaf-sha }}
-          identifier: org.open-cli-collective.${{ fromJSON(steps.meta.outputs.identity-json).binary }}
 
       - name: Release (publish)
         if: ${{ !inputs.dry-run }}
@@ -199,7 +237,7 @@ jobs:
           TEMP_TAG: ${{ steps.meta.outputs.current-tag }}
           FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
           VERSION: ${{ steps.meta.outputs.version }}
-          BINARY: ${{ fromJSON(steps.meta.outputs.identity-json).binary }}
+          BINARIES: ${{ steps.meta.outputs.binaries }}
         run: |
           set -euo pipefail
           if gh release view "$FINAL_TAG" >/dev/null 2>&1; then
@@ -209,7 +247,8 @@ jobs:
             # (or manually: gh release edit "$TEMP_TAG" --tag "$FINAL_TAG").
             gh release delete "$FINAL_TAG" --yes   # drop the release, keep its git tag
           fi
-          gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$BINARY $VERSION"
+          title="$(printf '%s' "$BINARIES" | tr ' ' '+')"
+          gh release edit "$TEMP_TAG" --tag "$FINAL_TAG" --title "$title $VERSION"
           git push origin ":refs/tags/$TEMP_TAG" || true   # temp tag may not be on the remote
 
       # Confirm the published cask render (real .Version) pins the final tag.
@@ -223,23 +262,25 @@ jobs:
       - name: Confirm published cask URL pins the final tag
         if: ${{ !inputs.dry-run && steps.meta.outputs.has-homebrew == 'true' }}
         env:
-          CANONICAL: ${{ fromJSON(steps.meta.outputs.identity-json).packages.homebrew.canonical_cask }}
+          HOMEBREW: ${{ steps.meta.outputs.homebrew-matrix }}
           FINAL_TAG: ${{ steps.meta.outputs.final-tag }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
-          [ -n "$cask" ] || { echo "::error::canonical cask ${CANONICAL}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
           # The final tag ends with the version; the prefix is everything before it
           # ("v" for bare repos, "jtk-v" for prefixed ones).
           prefix="${FINAL_TAG%"$VERSION"}"
           interp_tag="${prefix}#{version}"
-          if grep -Fq "/download/${FINAL_TAG}/" "$cask" || grep -Fq "/download/${interp_tag}/" "$cask"; then
-            echo "cask URL pins ${FINAL_TAG} (literal or ${interp_tag})"
-          else
-            echo "::error::cask $cask pins neither the literal final tag ${FINAL_TAG} nor ${interp_tag} in its download URL"
-            exit 1
-          fi
+          printf '%s' "$HOMEBREW" | jq -r '.[].canonical_cask' | while IFS= read -r canonical; do
+            cask="$(find dist -name "${canonical}.rb" -print -quit)"
+            [ -n "$cask" ] || { echo "::error::canonical cask ${canonical}.rb not rendered in dist (skip_upload cask missing?)"; exit 1; }
+            if grep -Fq "/download/${FINAL_TAG}/" "$cask" || grep -Fq "/download/${interp_tag}/" "$cask"; then
+              echo "$canonical cask URL pins ${FINAL_TAG} (literal or ${interp_tag})"
+            else
+              echo "::error::cask $cask pins neither the literal final tag ${FINAL_TAG} nor ${interp_tag} in its download URL"
+              exit 1
+            fi
+          done
 
       - name: Upload dist
         if: ${{ !inputs.dry-run }}
@@ -257,6 +298,11 @@ jobs:
     needs: goreleaser
     if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-homebrew == 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.goreleaser.outputs.homebrew-matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -266,7 +312,7 @@ jobs:
       - id: locate
         shell: bash
         env:
-          CANONICAL: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.canonical_cask }}
+          CANONICAL: ${{ matrix.canonical_cask }}
         run: |
           set -euo pipefail
           cask="$(find dist -name "${CANONICAL}.rb" -print -quit)"
@@ -275,8 +321,8 @@ jobs:
       - uses: open-cli-collective/.github/actions/homebrew-alias@v1
         with:
           canonical-cask-file: ${{ steps.locate.outputs.cask }}
-          canonical-token: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.canonical_cask }}
-          alias-tokens: ${{ join(fromJSON(needs.goreleaser.outputs.identity-json).packages.homebrew.alias_casks, ' ') }}
+          canonical-token: ${{ matrix.canonical_cask }}
+          alias-tokens: ${{ matrix.alias_casks }}
           tap-repo: open-cli-collective/homebrew-tap
           tap-token: ${{ secrets.homebrew-tap-token }}
 
@@ -284,10 +330,17 @@ jobs:
     needs: goreleaser
     if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-chocolatey == 'true' }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.goreleaser.outputs.chocolatey-matrix) }}
     env:
       VERSION: ${{ needs.goreleaser.outputs.version }}
       FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
-      CHOCO_ID: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.chocolatey.id }}
+      CHOCO_ID: ${{ matrix.id }}
+      X64_ASSET: ${{ matrix.x64_asset }}
+      ARM64_ASSET: ${{ matrix.arm64_asset }}
+      CHOCO_DIR: ${{ matrix.dir }}
     steps:
       - uses: actions/checkout@v4
       - name: Get checksums from release
@@ -297,11 +350,10 @@ jobs:
         run: |
           gh release download "$env:FINAL_TAG" --pattern "checksums.txt" --dir .
           $checksums = Get-Content checksums.txt
-          $x64Hash = ($checksums | Select-String "windows_amd64.zip").Line.Split()[0]
-          $arm64Hash = ($checksums | Select-String "windows_arm64.zip").Line.Split()[0]
-          # empty = the archive name template changed; fail rather than ship a bad hash
-          if (-not $x64Hash) { Write-Error "no windows_amd64.zip checksum in checksums.txt"; exit 1 }
-          if (-not $arm64Hash) { Write-Error "no windows_arm64.zip checksum in checksums.txt"; exit 1 }
+          $x64Hash = ($checksums | Select-String -SimpleMatch $env:X64_ASSET).Line.Split()[0]
+          $arm64Hash = ($checksums | Select-String -SimpleMatch $env:ARM64_ASSET).Line.Split()[0]
+          if (-not $x64Hash) { Write-Error "no checksum for $env:X64_ASSET in checksums.txt"; exit 1 }
+          if (-not $arm64Hash) { Write-Error "no checksum for $env:ARM64_ASSET in checksums.txt"; exit 1 }
           echo "X64_HASH=$x64Hash" >> $env:GITHUB_ENV
           echo "ARM64_HASH=$arm64Hash" >> $env:GITHUB_ENV
       - name: Update version and checksums
@@ -310,12 +362,12 @@ jobs:
         # tools/<tool>/packaging/chocolatey resolves (flat repos pass ".").
         working-directory: ${{ inputs.working-directory }}
         run: |
-          $nuspec = "packaging/chocolatey/$env:CHOCO_ID.nuspec"
+          $nuspec = "$env:CHOCO_DIR/$env:CHOCO_ID.nuspec"
           $content = Get-Content $nuspec -Raw
           # fail loud if the placeholder isn't present — a silent no-op would pack the wrong version
           if ($content -notmatch '<version>0\.0\.0</version>') { Write-Error "nuspec $nuspec has no <version>0.0.0</version> placeholder"; exit 1 }
           $content -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
-          $script = 'packaging/chocolatey/tools/chocolateyInstall.ps1'
+          $script = "$env:CHOCO_DIR/tools/chocolateyInstall.ps1"
           $content = Get-Content $script -Raw
           # fail loud if a placeholder is absent — a silent no-op would push literal placeholders
           if ($content -notmatch 'CHECKSUM_AMD64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_AMD64_PLACEHOLDER"; exit 1 }
@@ -326,8 +378,9 @@ jobs:
       - name: Pack and push
         uses: open-cli-collective/.github/actions/chocolatey-push@v1
         with:
-          package-id: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.chocolatey.id }}
+          package-id: ${{ matrix.id }}
           working-directory: ${{ inputs.working-directory }}
+          package-directory: ${{ matrix.dir }}
           api-key: ${{ secrets.chocolatey-api-key }}
 
   # winget/linux are best-effort: Microsoft-hosted flakiness must not gate the
@@ -337,20 +390,26 @@ jobs:
     if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-winget == 'true' }}
     runs-on: windows-latest
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.goreleaser.outputs.winget-matrix) }}
     env:
       VERSION: ${{ needs.goreleaser.outputs.version }}
       FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
-      WINGET_ID: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.id }}
+      WINGET_ID: ${{ matrix.id }}
     steps:
       - uses: actions/checkout@v4
       - uses: open-cli-collective/.github/actions/winget-submit@v1
         with:
-          package-id: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.id }}
+          package-id: ${{ matrix.id }}
           version: ${{ needs.goreleaser.outputs.version }}
           final-tag: ${{ needs.goreleaser.outputs.final-tag }}
           repo: ${{ github.repository }}
           working-directory: ${{ inputs.working-directory }}
-          bootstrap: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.winget.bootstrap }}
+          bootstrap: ${{ matrix.bootstrap }}
+          x64-marker: ${{ matrix.x64_asset }}
+          arm64-marker: ${{ matrix.arm64_asset }}
           github-token: ${{ github.token }}
           winget-token: ${{ secrets.winget-token }}
       # Surface ANY failure (missing token, asset resolution, wingetcreate) — a
@@ -365,11 +424,15 @@ jobs:
     if: ${{ !inputs.dry-run && needs.goreleaser.outputs.has-linux == 'true' }}
     runs-on: ubuntu-latest
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.goreleaser.outputs.linux-matrix) }}
     steps:
       - name: Dispatch linux-packages build
         env:
           DISPATCH_TOKEN: ${{ secrets.linux-dispatch-token }}
-          PACKAGE: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.linux.package_name }}
+          PACKAGE: ${{ matrix.package_name }}
           FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
           REPO: ${{ github.repository }}
         run: |
@@ -388,6 +451,6 @@ jobs:
       - name: Note linux-packages failure
         if: ${{ failure() }}
         env:
-          PACKAGE: ${{ fromJSON(needs.goreleaser.outputs.identity-json).packages.linux.package_name }}
+          PACKAGE: ${{ matrix.package_name }}
           FINAL_TAG: ${{ needs.goreleaser.outputs.final-tag }}
         run: echo "⚠️ linux-packages dispatch failed for ${PACKAGE} ${FINAL_TAG} — see the linux-packages job logs" >> "$GITHUB_STEP_SUMMARY"

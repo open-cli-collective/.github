@@ -10,28 +10,33 @@ bad() { echo "FAIL $1"; fails=$((fails+1)); }
 # --- check-artifacts ---
 cat > "$tmp/good.json" <<'JSON'
 [
- {"type":"Binary","goos":"darwin","goarch":"arm64","path":"a"},
- {"type":"Binary","goos":"darwin","goarch":"amd64","path":"b"},
- {"type":"Archive","goos":"darwin","goarch":"arm64","name":"x_darwin_arm64.tar.gz"},
- {"type":"Archive","goos":"darwin","goarch":"amd64","name":"x_darwin_amd64.tar.gz"}
+ {"type":"Binary","name":"gro","goos":"darwin","goarch":"arm64","path":"a"},
+ {"type":"Binary","name":"gro","goos":"darwin","goarch":"amd64","path":"b"},
+ {"type":"Binary","name":"grw","goos":"darwin","goarch":"arm64","path":"c"},
+ {"type":"Binary","name":"grw","goos":"darwin","goarch":"amd64","path":"d"},
+ {"type":"Archive","goos":"darwin","goarch":"arm64","name":"gro_darwin_arm64.tar.gz","extra":{"Binaries":["gro"]}},
+ {"type":"Archive","goos":"darwin","goarch":"amd64","name":"gro_darwin_amd64.tar.gz","extra":{"Binaries":["gro"]}},
+ {"type":"Archive","goos":"darwin","goarch":"arm64","name":"grw_darwin_arm64.tar.gz","extra":{"ID":"grw"}},
+ {"type":"Archive","goos":"darwin","goarch":"amd64","name":"grw_darwin_amd64.tar.gz","extra":{"ID":"grw"}}
 ]
 JSON
-bash darwin-gate.sh check-artifacts "$tmp/good.json" >/dev/null 2>&1 && ok "artifacts good" || bad "artifacts good"
+bash darwin-gate.sh check-artifacts "$tmp/good.json" '["gro","grw"]' >/dev/null 2>&1 && ok "multi-binary artifacts good" || bad "multi-binary artifacts good"
 
 cat > "$tmp/dup.json" <<'JSON'
 [
- {"type":"Binary","goos":"darwin","goarch":"arm64","path":"a"},
- {"type":"Binary","goos":"darwin","goarch":"amd64","path":"b"},
- {"type":"Archive","goos":"darwin","goarch":"arm64","name":"dup.tar.gz"},
- {"type":"Archive","goos":"darwin","goarch":"amd64","name":"dup.tar.gz"}
+ {"type":"Binary","name":"gro","goos":"darwin","goarch":"arm64","path":"a"},
+ {"type":"Binary","name":"gro","goos":"darwin","goarch":"amd64","path":"b"},
+ {"type":"Archive","goos":"darwin","goarch":"arm64","name":"one.tar.gz","extra":{"ID":"gro"}},
+ {"type":"Archive","goos":"darwin","goarch":"arm64","name":"two.tar.gz","extra":{"ID":"gro"}},
+ {"type":"Archive","goos":"darwin","goarch":"amd64","name":"three.tar.gz","extra":{"ID":"gro"}}
 ]
 JSON
-bash darwin-gate.sh check-artifacts "$tmp/dup.json" >/dev/null 2>&1 && bad "artifacts dup should fail" || ok "artifacts dup fails"
+bash darwin-gate.sh check-artifacts "$tmp/dup.json" '["gro"]' >/dev/null 2>&1 && bad "artifacts duplicate owner should fail" || ok "artifacts duplicate owner fails"
 
 cat > "$tmp/missing.json" <<'JSON'
-[ {"type":"Binary","goos":"darwin","goarch":"arm64","path":"a"} ]
+[ {"type":"Binary","name":"gro","goos":"darwin","goarch":"arm64","path":"a"} ]
 JSON
-bash darwin-gate.sh check-artifacts "$tmp/missing.json" >/dev/null 2>&1 && bad "artifacts missing should fail" || ok "artifacts missing fails"
+bash darwin-gate.sh check-artifacts "$tmp/missing.json" '["gro"]' >/dev/null 2>&1 && bad "artifacts missing should fail" || ok "artifacts missing fails"
 
 # --- probe (json) with a stub binary ---
 cat > "$tmp/stub-good" <<'SH'
