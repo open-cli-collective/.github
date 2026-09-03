@@ -1,20 +1,22 @@
 builds:
-  - {id: gro, binary: gro}
   - {id: gro-darwin, binary: gro}
-  - {id: grw, binary: grw}
+  - {id: gro-unix-win, binary: gro}
   - {id: grw-darwin, binary: grw}
+  - {id: grw-unix-win, binary: grw}
 archives:
-  - ids: [gro, gro-darwin]
+  - id: gro
+    ids: [gro-darwin, gro-unix-win]
     name_template: "gro_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - ids: [grw, grw-darwin]
+  - id: grw
+    ids: [grw-darwin, grw-unix-win]
     name_template: "grw_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 nfpms:
-  - ids: [gro]
+  - ids: [gro-unix-win]
     package_name: google-readonly
-  - ids: [grw]
+  - ids: [grw-unix-win]
     package_name: grw
 homebrew_casks:
-  - ids: [gro-darwin]
+  - ids: [gro]
     name: gro
-  - ids: [grw-darwin]
+  - ids: [grw]
     name: grw

@@ -437,7 +437,7 @@ def test_multi_binary_build_without_id_fails(tmp_path):
 
 def test_multi_binary_archive_cannot_mix_builds(tmp_path):
     wd = multi_fixture(tmp_path)
-    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data["archives"][0].__setitem__("ids", ["gro", "grw"]))
+    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data["archives"][0].__setitem__("ids", ["gro-darwin", "grw-darwin"]))
     errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
     assert any("archives entry mixes binaries" in error for error in errors)
 

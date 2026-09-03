@@ -301,13 +301,27 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
                 else:
                     build_to_binary[dedupe_key] = build["binary"]
 
-        for kind in ("archives", "nfpms", "homebrew_casks"):
+        archive_to_binary: dict[str, str] = {}
+        for kind in ("archives", "nfpms"):
             for entry in gor.get(kind, []) or []:
                 owner, error = _entry_owner(entry, build_to_binary, multi, kind)
                 if error:
                     errors.append(error)
                 elif owner in owned:
                     owned[owner][kind].append(entry)
+                    if kind == "archives" and entry.get("id"):
+                        archive_to_binary[entry["id"]] = owner
+
+        # GoReleaser casks consume archives, so their ids refer to archive ids,
+        # not build ids. Single-binary configs may omit filters and retain the
+        # historical build-map attribution fallback.
+        cask_owners = archive_to_binary if multi else build_to_binary
+        for entry in gor.get("homebrew_casks", []) or []:
+            owner, error = _entry_owner(entry, cask_owners, multi, "homebrew_casks")
+            if error:
+                errors.append(error)
+            elif owner in owned:
+                owned[owner]["homebrew_casks"].append(entry)
 
     for name, binary in by_name.items():
         pkgs = binary.get("packages", {}) or {}
