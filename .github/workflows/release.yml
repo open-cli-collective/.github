@@ -197,7 +197,7 @@ jobs:
           # version, so rewrite that substring before handing names to the
           # Windows channels.
           snapshot_version="$(jq -r '.version' dist/metadata.json)"
-          [ -n "$snapshot_version" ] && [ "$snapshot_version" != null ] || { echo "::error::dist/metadata.json has no version"; exit 1; }
+          [ -n "$snapshot_version" ] && [ "$snapshot_version" != null ] || { echo "::error::dist/metadata.json has no version; the snapshot goreleaser step above must write it (check GORELEASER_CURRENT_TAG and the goreleaser config)"; exit 1; }
           enrich() {
             printf '%s' "$1" | jq -c --slurpfile artifacts dist/artifacts.json --arg snap "$snapshot_version" --arg final "$VERSION" '
               def owns($name):
