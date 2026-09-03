@@ -189,15 +189,23 @@ jobs:
         env:
           CHOCOLATEY: ${{ steps.meta.outputs.chocolatey-base-matrix }}
           WINGET: ${{ steps.meta.outputs.winget-base-matrix }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
+          # The snapshot build names its archives with the snapshot version
+          # (e.g. 1.2.1-SNAPSHOT-abc1234); the published release uses the final
+          # version, so rewrite that substring before handing names to the
+          # Windows channels.
+          snapshot_version="$(jq -r '.version' dist/metadata.json)"
+          [ -n "$snapshot_version" ] && [ "$snapshot_version" != null ] || { echo "::error::dist/metadata.json has no version; the snapshot goreleaser step above must write it (check GORELEASER_CURRENT_TAG and the goreleaser config)"; exit 1; }
           enrich() {
-            printf '%s' "$1" | jq -c --slurpfile artifacts dist/artifacts.json '
+            printf '%s' "$1" | jq -c --slurpfile artifacts dist/artifacts.json --arg snap "$snapshot_version" --arg final "$VERSION" '
               def owns($name):
                 (.extra.ID // "") == $name or
                 ((.extra.Binaries // []) | index($name) != null);
+              def finalize: split($snap) | join($final);
               def asset($name; $arch):
-                [$artifacts[0][] | select(.type == "Archive" and .goos == "windows" and .goarch == $arch and owns($name)) | .name]
+                [$artifacts[0][] | select(.type == "Archive" and .goos == "windows" and .goarch == $arch and owns($name)) | .name | finalize]
                 | if length == 1 then .[0] else error("expected exactly one windows/" + $arch + " archive for " + $name + "; got " + (length|tostring)) end;
               map(. + {x64_asset: asset(.name; "amd64"), arm64_asset: asset(.name; "arm64")})'
           }
