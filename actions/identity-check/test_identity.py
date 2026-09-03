@@ -1,6 +1,8 @@
 """Unit tests for identity.py — PASS plus every drift rule, built in tmp dirs."""
 import copy
 import os
+from pathlib import Path
+import shutil
 
 import pytest
 import yaml
@@ -66,6 +68,19 @@ def build(tmp_path, manifest=None, goreleaser=None, winget_id=None, choco_id=Non
 
 def manifest_path(wd):
     return os.path.join(wd, "packaging", "identity.yml")
+
+
+def multi_fixture(tmp_path):
+    source = Path(__file__).parents[2] / "tests" / "fixtures" / "identity" / "google-cli"
+    target = tmp_path / "google-cli"
+    shutil.copytree(source, target)
+    return target
+
+
+def rewrite_yaml(path, mutate):
+    data = yaml.safe_load(path.read_text())
+    mutate(data)
+    path.write_text(yaml.safe_dump(data))
 
 
 def test_pass(tmp_path):
@@ -258,15 +273,19 @@ def test_export_json_missing_manifest_errors(tmp_path):
 def test_export_json_shape(tmp_path):
     wd = build(tmp_path)
     norm = identity.normalize(identity.load_manifest(manifest_path(wd)))
-    assert norm["binary"] == "slck"
+    assert "binary" not in norm
+    assert len(norm["binaries"]) == 1
+    binary = norm["binaries"][0]
+    assert binary["name"] == "slck"
     assert norm["tag"]["prefix"] == "v"
-    assert norm["archives"]["name_template"].startswith("slck_v")
-    assert norm["packages"]["homebrew"]["alias_casks"] == ["slack-chat-cli"]
-    assert norm["packages"]["winget"] == {
+    assert binary["archives"]["name_template"].startswith("slck_v")
+    assert binary["packages"]["homebrew"]["alias_casks"] == ["slack-chat-cli"]
+    assert binary["packages"]["winget"] == {
         "id": "OpenCLICollective.slack-chat-cli",
         "bootstrap": False,
     }
-    assert norm["packages"]["linux"]["package_name"] == "slck"
+    assert binary["packages"]["chocolatey"]["dir"] == "packaging/chocolatey"
+    assert binary["packages"]["linux"]["package_name"] == "slck"
     assert norm["version_file"] == "version.txt"
 
 
@@ -275,7 +294,7 @@ def test_export_json_winget_bootstrap_true(tmp_path):
     m["packages"]["winget"]["bootstrap"] = True
     wd = build(tmp_path, manifest=m)
     norm = identity.normalize(identity.load_manifest(manifest_path(wd)))
-    assert norm["packages"]["winget"]["bootstrap"] is True
+    assert norm["binaries"][0]["packages"]["winget"]["bootstrap"] is True
 
 
 def test_winget_bootstrap_must_be_boolean(tmp_path):
@@ -341,3 +360,98 @@ def test_monorepo_goreleaser_not_found_under_working_dir(tmp_path):
     repo_root, wd = build_monorepo(tmp_path)
     errs = identity.validate(os.path.join(wd, "packaging", "identity.yml"), wd, wd)
     assert any("goreleaser_config not found" in e for e in errs)
+
+
+def test_manifest_rejects_binary_and_binaries(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["binaries"] = [{"name": "grw"}]
+    path = tmp_path / "identity.yml"
+    path.write_text(yaml.safe_dump(m))
+    with pytest.raises(identity.ManifestError, match="exactly one"):
+        identity.load_manifest(str(path))
+
+
+def test_manifest_rejects_empty_binaries(tmp_path):
+    m = {"schema": identity.SCHEMA, "goreleaser_config": ".goreleaser.yml", "binaries": []}
+    path = tmp_path / "identity.yml"
+    path.write_text(yaml.safe_dump(m))
+    with pytest.raises(identity.ManifestError, match="non-empty"):
+        identity.load_manifest(str(path))
+
+
+def test_manifest_rejects_missing_binary_shape(tmp_path):
+    m = {"schema": identity.SCHEMA, "goreleaser_config": ".goreleaser.yml"}
+    path = tmp_path / "identity.yml"
+    path.write_text(yaml.safe_dump(m))
+    with pytest.raises(identity.ManifestError, match="exactly one"):
+        identity.load_manifest(str(path))
+
+
+def test_manifest_rejects_duplicate_binary_names(tmp_path):
+    m = {"schema": identity.SCHEMA, "goreleaser_config": ".goreleaser.yml", "binaries": [{"name": "gro"}, {"name": "gro"}]}
+    path = tmp_path / "identity.yml"
+    path.write_text(yaml.safe_dump(m))
+    with pytest.raises(identity.ManifestError, match="unique"):
+        identity.load_manifest(str(path))
+
+
+def test_multi_binary_fixture_passes_and_exports_normalized_shape(tmp_path):
+    wd = multi_fixture(tmp_path)
+    manifest = identity.load_manifest(str(wd / "packaging" / "identity.yml"))
+    assert identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd)) == []
+    norm = identity.normalize(manifest)
+    assert [binary["name"] for binary in norm["binaries"]] == ["gro", "grw"]
+    assert norm["binaries"][0]["packages"]["chocolatey"]["dir"] == "packaging/chocolatey/google-readonly"
+    assert norm["binaries"][1]["packages"]["chocolatey"]["dir"] == "packaging/chocolatey/grw"
+    assert not ({"binary", "archives", "packages", "keychain_probe"} & set(norm))
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "wrong"),
+    [
+        ("archives", "name_template", "wrong_{{ .Version }}"),
+        ("nfpms", "package_name", "wrong"),
+        ("homebrew_casks", "name", "wrong"),
+    ],
+)
+def test_multi_binary_goreleaser_drift_is_attributed(tmp_path, section, field, wrong):
+    wd = multi_fixture(tmp_path)
+    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data[section][1].__setitem__(field, wrong))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any(error.startswith("grw:") and field in error for error in errors)
+
+
+def test_multi_binary_unfiltered_archive_fails(tmp_path):
+    wd = multi_fixture(tmp_path)
+    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data["archives"][1].pop("ids"))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any("archives entry must filter" in error for error in errors)
+
+
+def test_multi_binary_build_without_id_fails(tmp_path):
+    wd = multi_fixture(tmp_path)
+    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data["builds"][0].pop("id"))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any("build must set 'id:'" in error for error in errors)
+
+
+def test_multi_binary_archive_cannot_mix_builds(tmp_path):
+    wd = multi_fixture(tmp_path)
+    rewrite_yaml(wd / ".goreleaser.yml", lambda data: data["archives"][0].__setitem__("ids", ["gro", "grw"]))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any("archives entry mixes binaries" in error for error in errors)
+
+
+def test_multi_binary_chocolatey_drift_is_attributed(tmp_path):
+    wd = multi_fixture(tmp_path)
+    (wd / "packaging" / "chocolatey" / "grw" / "grw.nuspec").write_text(NUSPEC.format(id="wrong"))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any(error.startswith("grw:") and "chocolatey.id" in error for error in errors)
+
+
+def test_multi_binary_winget_drift_is_attributed(tmp_path):
+    wd = multi_fixture(tmp_path)
+    path = wd / "packaging" / "winget" / "OpenCLICollective.grw.installer.yaml"
+    path.write_text(yaml.safe_dump({"PackageIdentifier": "OpenCLICollective.wrong"}))
+    errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
+    assert any(error.startswith("grw:") and "PackageIdentifier" in error for error in errors)

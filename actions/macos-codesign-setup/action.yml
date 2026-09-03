@@ -4,8 +4,8 @@ description: >
   script for goreleaser's darwin hooks.post (cli-common distribution.md §2A). Self-gated:
   a no-op unless all four cert secrets are passed (all-or-none), so an
   opt-out or rolling-v1 caller that hasn't wired the secrets still releases unsigned and
-  green. When enabled it exports SIGN_IDENTITY, TOOL_IDENTIFIER, CODESIGN_DARWIN_SCRIPT,
-  and REQUIRE_SIGNING for the goreleaser build steps.
+  green. When enabled it exports SIGN_IDENTITY, CODESIGN_DARWIN_SCRIPT, and
+  REQUIRE_SIGNING for the goreleaser build steps.
 inputs:
   cert-p12:
     description: "base64 of the code-signing .p12 (MACOS_CERT_P12)"
@@ -21,10 +21,6 @@ inputs:
     default: ""
   cert-leaf-sha:
     description: "pinned cert leaf SHA-1 (MACOS_CERT_LEAF_SHA). Consumed by darwin-gate; required here only so the all-or-none gate spans all four secrets (else a caller could sign but skip DR enforcement)."
-    required: false
-    default: ""
-  binary:
-    description: "binary short name (identity-json .binary); drives org.open-cli-collective.<binary>"
     required: false
     default: ""
 outputs:
@@ -43,7 +39,6 @@ runs:
         PASSWORD: ${{ inputs.cert-password }}
         CN: ${{ inputs.cert-cn }}
         LEAF_SHA: ${{ inputs.cert-leaf-sha }}
-        BINARY: ${{ inputs.binary }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -74,7 +69,6 @@ runs:
       shell: bash
       env:
         CN: ${{ inputs.cert-cn }}
-        BINARY: ${{ inputs.binary }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -85,8 +79,7 @@ runs:
         install -m 0755 "$ACTION_PATH/codesign-darwin.sh" "$script"
         {
           echo "SIGN_IDENTITY=$CN"
-          echo "TOOL_IDENTIFIER=org.open-cli-collective.$BINARY"
           echo "CODESIGN_DARWIN_SCRIPT=$script"
           echo "REQUIRE_SIGNING=1"
         } >> "$GITHUB_ENV"
-        echo "::notice::code-signing enabled — identity '$CN', identifier org.open-cli-collective.$BINARY"
+        echo "::notice::code-signing enabled — identity '$CN'"

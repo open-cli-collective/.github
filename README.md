@@ -49,3 +49,38 @@ Local convenience copy, if present: `../cli-common/docs/distribution.md`
 - `.github/workflows/` - reusable workflows for release and auto-release flows.
 - `tests/fixtures/` - small fixtures used to test the actions and workflow
   support code.
+
+## Release identity manifests
+
+The reusable `auto-release.yml` and `release.yml` workflows read
+`packaging/identity.yml` through `actions/identity-check`. A manifest uses
+schema `open-cli-identity/v1` and declares exactly one of these shapes:
+
+```yaml
+binary: tool
+archives: {name_template: "tool_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}
+packages: {}
+keychain_probe: {}
+```
+
+```yaml
+binaries:
+  - name: tool
+    archives: {name_template: "tool_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}
+    packages: {}
+    keychain_probe: {}
+  - name: helper
+    archives: {name_template: "helper_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}
+    packages: {}
+```
+
+`repo`, `goreleaser_config`, `version_file`, and `tag` remain top-level. For a
+multi-binary manifest, every GoReleaser build needs an `id`, and each archive,
+nfpm, and Homebrew cask must use `ids` or `builds` to select builds belonging
+to one binary. Multi-binary Chocolatey packages live under
+`packaging/chocolatey/<id>/`; the single-binary flat layout is unchanged.
+
+Call either reusable workflow with `manifest-path` and `working-directory`
+when those files are not at their defaults. `release.yml` builds once, then
+runs each declared Homebrew, Chocolatey, Winget, Linux-package, and Keychain
+probe channel per binary.

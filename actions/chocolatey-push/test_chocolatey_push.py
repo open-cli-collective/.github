@@ -58,6 +58,26 @@ def test_pack_and_push_success(tmp_path):
     ]
 
 
+def test_pack_and_push_uses_nested_package_directory(tmp_path):
+    package_dir = tmp_path / "packaging" / "chocolatey" / "grw"
+    package_dir.mkdir(parents=True)
+    (package_dir / "grw.nupkg").write_text("package")
+    calls = []
+
+    def runner(command, cwd, **_kwargs):
+        calls.append((command, cwd))
+        return chocolatey_push.CommandResult(0, "", "")
+
+    assert chocolatey_push.pack_and_push(
+        package_id="grw",
+        working_dir=tmp_path,
+        package_dir="packaging/chocolatey/grw",
+        api_key="secret",
+        command_runner=runner,
+    ) == 0
+    assert all(cwd == package_dir for _, cwd in calls)
+
+
 def test_pack_and_push_requires_api_key(tmp_path):
     with pytest.raises(chocolatey_push.PushError, match="chocolatey-api-key"):
         chocolatey_push.pack_and_push(

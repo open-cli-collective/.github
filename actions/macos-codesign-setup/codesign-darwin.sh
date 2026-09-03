@@ -12,11 +12,12 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
   [ "${REQUIRE_SIGNING:-0}" = 1 ] && { echo "ERROR: REQUIRE_SIGNING set but SIGN_IDENTITY missing" >&2; exit 1; }
   echo "no SIGN_IDENTITY — skipping codesign (local build)"; exit 0
 fi
-codesign --force --sign "$SIGN_IDENTITY" --identifier "${TOOL_IDENTIFIER:?TOOL_IDENTIFIER required}" "$BIN"
+IDENTIFIER="org.open-cli-collective.$(basename "$BIN")"
+codesign --force --sign "$SIGN_IDENTITY" --identifier "$IDENTIFIER" "$BIN"
 codesign --verify --strict "$BIN"
 # Fail loudly if the requirement still pins a per-build cdhash (ad-hoc). Parse ONLY the
 # `designated =>` requirement line — a valid signature still prints `CDHash=` metadata,
 # which is not the requirement keyword `cdhash`.
 req="$(codesign -d -r- "$BIN" 2>&1 | sed -n 's/^designated => //p')"
 case "$req" in *cdhash*) echo "ERROR: designated requirement still pins cdhash; grant will not persist" >&2; exit 1 ;; esac
-echo "signed $BIN ($SIGN_IDENTITY / $TOOL_IDENTIFIER)"
+echo "signed $BIN ($SIGN_IDENTITY / $IDENTIFIER)"

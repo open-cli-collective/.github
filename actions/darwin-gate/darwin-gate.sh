@@ -2,8 +2,8 @@
 # CGO-darwin pre-publish gate (distribution.md §2). Proves the darwin binaries
 # actually carry the Keychain backend before anything is published.
 #
-#   darwin-gate.sh check-artifacts <artifacts.json>
-#       darwin arm64+amd64 binaries present; exactly one darwin archive per arch.
+#   darwin-gate.sh check-artifacts <artifacts.json> <binary-names-json>
+#       exactly one darwin Binary and Archive per requested binary and arch.
 #   darwin-gate.sh check-macho <arm64-bin> <amd64-bin>      (macOS only)
 #       Mach-O arch sanity + amd64 linked against Security.framework.
 #   darwin-gate.sh probe <keychain-probe-json> <arm64-bin>
@@ -19,20 +19,21 @@
 set -euo pipefail
 
 check_artifacts() {
-  local art="$1"
+  local art="$1" names="$2"
   command -v jq >/dev/null || { echo "::error::jq required"; exit 2; }
-  local arm amd tot uniq
-  arm=$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="arm64")]|length' "$art")
-  amd=$(jq -r '[.[]|select(.type=="Binary" and .goos=="darwin" and .goarch=="amd64")]|length' "$art")
-  [ "$arm" -ge 1 ] && [ "$amd" -ge 1 ] || { echo "::error::missing a darwin binary (arm64=$arm amd64=$amd)"; return 1; }
-  tot=$(jq '[.[]|select(.type=="Archive" and .goos=="darwin")|.name]|length' "$art")
-  uniq=$(jq '[.[]|select(.type=="Archive" and .goos=="darwin")|.name]|unique|length' "$art")
-  [ "$tot" = "$uniq" ] || { echo "::error::duplicate darwin archive names"; return 1; }
-  for a in arm64 amd64; do
-    local n
-    n=$(jq "[.[]|select(.type==\"Archive\" and .goos==\"darwin\" and .goarch==\"$a\")]|length" "$art")
-    [ "$n" = 1 ] || { echo "::error::expected exactly one darwin/$a archive (got $n)"; return 1; }
-  done
+  local name arch binaries archives
+  while IFS= read -r name; do
+    for arch in arm64 amd64; do
+      binaries=$(jq --arg name "$name" --arg arch "$arch" '[.[]|select(.type=="Binary" and .name==$name and .goos=="darwin" and .goarch==$arch)]|length' "$art")
+      archives=$(jq --arg name "$name" --arg arch "$arch" '
+        def owns($n):
+          (.extra.ID // "") == $n or
+          ((.extra.Binaries // []) | index($n) != null);
+        [.[]|select(.type=="Archive" and .goos=="darwin" and .goarch==$arch and owns($name))]|length' "$art")
+      [ "$binaries" = 1 ] || { echo "::error::expected exactly one $name darwin/$arch Binary (got $binaries)"; return 1; }
+      [ "$archives" = 1 ] || { echo "::error::expected exactly one $name darwin/$arch Archive (got $archives)"; return 1; }
+    done
+  done < <(printf '%s' "$names" | jq -r '.[]')
   echo "check-artifacts OK"
 }
 
@@ -142,7 +143,7 @@ check_signature() {
 }
 
 case "${1:-}" in
-  check-artifacts) check_artifacts "$2" ;;
+  check-artifacts) check_artifacts "$2" "$3" ;;
   check-macho)     check_macho "$2" "$3" ;;
   probe)           probe "$2" "$3" ;;
   assert-dr)       assert_dr "$2" "$3" ;;

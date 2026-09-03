@@ -1,0 +1,28 @@
+schema: open-cli-identity/v1
+repo: google-cli
+goreleaser_config: .goreleaser.yml
+version_file: version.txt
+tag: {prefix: v, version_scheme: major_minor_run_patch}
+binaries:
+  - name: gro
+    archives: {name_template: "gro_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}
+    packages:
+      homebrew: {canonical_cask: gro, alias_casks: [google-readonly]}
+      winget: {id: OpenCLICollective.google-readonly}
+      chocolatey: {id: google-readonly}
+      linux: {package_name: google-readonly}
+    keychain_probe:
+      command: [config, show, --json]
+      output: json
+      assertions: {.backend: keychain}
+  - name: grw
+    archives: {name_template: "grw_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"}
+    packages:
+      homebrew: {canonical_cask: grw}
+      winget: {id: OpenCLICollective.grw}
+      chocolatey: {id: grw}
+      linux: {package_name: grw}
+    keychain_probe:
+      command: [config, show, --json]
+      output: json
+      assertions: {.backend: keychain}

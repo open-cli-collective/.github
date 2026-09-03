@@ -8,6 +8,10 @@ inputs:
     description: Repository-relative tool working directory.
     required: false
     default: "."
+  package-directory:
+    description: Chocolatey package directory relative to working-directory.
+    required: false
+    default: packaging/chocolatey
   api-key:
     description: Chocolatey API key.
     required: true
@@ -22,9 +26,11 @@ runs:
         CHOCO_API_KEY: ${{ inputs.api-key }}
         PACKAGE_ID: ${{ inputs.package-id }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        PACKAGE_DIRECTORY: ${{ inputs.package-directory }}
       run: |
         python -m pip install "defusedxml==0.7.1"
         python "$GITHUB_ACTION_PATH/chocolatey_push.py" push \
           --package-id "$PACKAGE_ID" \
           --working-directory "$WORKING_DIRECTORY" \
+          --package-directory "$PACKAGE_DIRECTORY" \
           --api-key-env CHOCO_API_KEY
