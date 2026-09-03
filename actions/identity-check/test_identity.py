@@ -455,3 +455,19 @@ def test_multi_binary_winget_drift_is_attributed(tmp_path):
     path.write_text(yaml.safe_dump({"PackageIdentifier": "OpenCLICollective.wrong"}))
     errors = identity.validate(str(wd / "packaging" / "identity.yml"), str(wd), str(wd))
     assert any(error.startswith("grw:") and "PackageIdentifier" in error for error in errors)
+
+
+def test_binary_name_with_path_separator_fails(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["binary"] = "../evil"
+    wd = build(tmp_path, manifest=m, winget_id="", choco_id="")
+    with pytest.raises(identity.ManifestError, match="binary"):
+        identity.load_manifest(manifest_path(wd))
+
+
+def test_chocolatey_id_with_traversal_fails(tmp_path):
+    m = copy.deepcopy(BASE_MANIFEST)
+    m["packages"]["chocolatey"] = {"id": "../../x"}
+    wd = build(tmp_path, manifest=m, winget_id="", choco_id="")
+    with pytest.raises(identity.ManifestError, match="chocolatey.id"):
+        identity.load_manifest(manifest_path(wd))

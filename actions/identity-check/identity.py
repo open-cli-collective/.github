@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from pathlib import PurePosixPath
 
@@ -48,6 +49,20 @@ def _load_yaml(path: str) -> dict:
     return data
 
 
+# Binary names and chocolatey ids become path segments (packaging/chocolatey/<id>,
+# dist/<binary>) so they must be plain identifiers — no separators, no traversal.
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _check_safe_id(manifest_path: str, what: str, value) -> None:
+    if not isinstance(value, str) or not SAFE_ID_RE.match(value):
+        raise ManifestError(f"{manifest_path}: {what} {value!r} must match {SAFE_ID_RE.pattern}")
+
+
+def _chocolatey_id(binary: dict):
+    return ((binary.get("packages", {}) or {}).get("chocolatey", {}) or {}).get("id")
+
+
 def load_manifest(manifest_path: str) -> dict:
     m = _load_yaml(manifest_path)
     if m.get("schema") != SCHEMA:
@@ -60,14 +75,20 @@ def load_manifest(manifest_path: str) -> dict:
     has_binaries = "binaries" in m
     if has_binary == has_binaries:
         raise ManifestError(f"{manifest_path}: declare exactly one of 'binary' or 'binaries'")
-    if has_binary and (not isinstance(m["binary"], str) or not m["binary"]):
-        raise ManifestError(f"{manifest_path}: binary must be a non-empty string")
+    if has_binary:
+        _check_safe_id(manifest_path, "binary", m["binary"])
+        if (choco_id := _chocolatey_id(m)) is not None:
+            _check_safe_id(manifest_path, "chocolatey.id", choco_id)
     if has_binaries:
         binaries = m["binaries"]
         if not isinstance(binaries, list) or not binaries:
             raise ManifestError(f"{manifest_path}: binaries must be a non-empty list")
-        if any(not isinstance(binary, dict) or not isinstance(binary.get("name"), str) or not binary["name"] for binary in binaries):
-            raise ManifestError(f"{manifest_path}: every binaries entry must have a non-empty string name")
+        for binary in binaries:
+            if not isinstance(binary, dict):
+                raise ManifestError(f"{manifest_path}: every binaries entry must be a mapping")
+            _check_safe_id(manifest_path, "binaries[].name", binary.get("name"))
+            if (choco_id := _chocolatey_id(binary)) is not None:
+                _check_safe_id(manifest_path, f"binaries[{binary['name']}].chocolatey.id", choco_id)
         names = [binary["name"] for binary in binaries]
         if len(names) != len(set(names)):
             raise ManifestError(f"{manifest_path}: binary names must be unique")
@@ -104,12 +125,12 @@ def normalize(m: dict) -> dict:
     """The stable shape release workflows consume."""
     tag = m.get("tag", {}) or {}
     if "binaries" in m:
+        # Several binaries share packaging/, so each chocolatey package gets its
+        # own directory named by its id.
         binaries = [
             _normalize_binary(
                 binary,
-                f"packaging/chocolatey/{(binary.get('packages', {}).get('chocolatey', {}) or {}).get('id')}"
-                if (binary.get("packages", {}).get("chocolatey", {}) or {}).get("id")
-                else "packaging/chocolatey",
+                f"packaging/chocolatey/{_chocolatey_id(binary)}" if _chocolatey_id(binary) else "packaging/chocolatey",
             )
             for binary in m["binaries"]
         ]
@@ -257,6 +278,9 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
         if not builds:
             errors.append("goreleaser has no builds — cannot verify the binary against the manifest")
         else:
+            # GoReleaser infers binary from the module when `binary:` is omitted,
+            # which we can't verify — so require it explicit (else the drift guard
+            # silently passes on an inferred name that may differ).
             if any(not b.get("binary") for b in builds):
                 errors.append("every .goreleaser build must set 'binary:' explicitly so it can be verified against the manifest")
             explicit = {b.get("binary") for b in builds if b.get("binary")}
@@ -265,11 +289,17 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
                 errors.append(f"goreleaser builds[].binary {sorted(explicit)} != manifest binaries {sorted(wanted)}")
             if multi and any(not b.get("id") for b in builds):
                 errors.append("every .goreleaser build must set 'id:' explicitly for a binaries manifest")
+            # Builds without an explicit id (allowed for a single-binary manifest)
+            # get a synthetic per-index key so only builds that SHARE an explicit
+            # id are flagged as duplicates.
             for index, build in enumerate(builds):
-                if build.get("binary") and build.get("id", f"__single_{index}") in build_to_binary:
+                if not build.get("binary"):
+                    continue
+                dedupe_key = build.get("id", f"__single_{index}")
+                if dedupe_key in build_to_binary:
                     errors.append(f"duplicate goreleaser build id '{build.get('id')}'")
-                elif build.get("binary"):
-                    build_to_binary[build.get("id", f"__single_{index}")] = build["binary"]
+                else:
+                    build_to_binary[dedupe_key] = build["binary"]
 
         for kind in ("archives", "nfpms", "homebrew_casks"):
             for entry in gor.get(kind, []) or []:
@@ -305,6 +335,9 @@ def validate(manifest_path: str, working_dir: str, repo_root: str = ".") -> list
                 if entry.get("package_name") != linux_pkg:
                     errors.append(f"{name}: goreleaser nfpm package_name '{entry.get('package_name')}' != manifest '{linux_pkg}'")
 
+        # alias_casks are intentionally NOT checked: they live only in the
+        # manifest and are generated by the homebrew alias post-step, so there is
+        # no tool-native copy to enforce against (distribution.md §8.2).
         cask = (pkgs.get("homebrew", {}) or {}).get("canonical_cask")
         if gor is not None and cask:
             entries = owned[name]["homebrew_casks"]
