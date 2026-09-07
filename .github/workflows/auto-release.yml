@@ -59,15 +59,20 @@ jobs:
         env:
           IDJSON: ${{ steps.identity.outputs.identity-json }}
           WD: ${{ inputs.working-directory }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           prefix="$(printf '%s' "$IDJSON" | jq -r '.tag.prefix // "v"')"
           vfile="$(printf '%s' "$IDJSON" | jq -r '.version_file // "version.txt"')"
           version="$(tr -d ' \t\n\r' < "$WD/$vfile")"
+          # workflow_dispatch has no head_commit payload. Read the subject from
+          # the exact commit we will tag, for both push and manual runs.
+          subject="$(git log -1 --format=%s "$SHA" --)"
           {
             echo "prefix=$prefix"
             echo "version-file=$vfile"
             echo "version=$version"
+            printf 'commit-subject=%s\n' "$subject"
           } >> "$GITHUB_OUTPUT"
 
       - id: gate
@@ -81,7 +86,7 @@ jobs:
           run-number: ${{ github.run_number }}
           before-sha: ${{ github.event.before }}
           after-sha: ${{ github.sha }}
-          commit-message: ${{ github.event.head_commit.message }}
+          commit-message: ${{ steps.meta.outputs.commit-subject }}
 
       - name: Tag
         if: steps.gate.outputs.should-release == 'true'
