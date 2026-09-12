@@ -114,6 +114,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash actions/auto-release/test_gate.sh
         shell: bash
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "PyYAML==6.0.2"
+        shell: bash
+      - run: python actions/auto-release/test_workflow.py
+        shell: bash
 
   # darwin-gate portable halves (artifact sanity + the functional probe) via a
   # stub binary. check-macho needs the macOS toolchain → exercised in a real #8
