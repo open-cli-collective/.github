@@ -21,7 +21,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./actions/go-build
         with:
           working-directory: tests/fixtures/minimal
@@ -29,7 +29,7 @@ jobs:
   test-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./actions/go-test
         with:
           working-directory: tests/fixtures/minimal
@@ -46,7 +46,7 @@ jobs:
   grammar:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: grammar matrix
         shell: bash
         run: |
@@ -81,14 +81,14 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: conventional-commit action (valid)
         uses: ./actions/conventional-commit
         with:
           mode: title
           message: "feat(api): wire up the thing"
       - name: pr-title action (valid)
-        uses: ./actions/pr-title
+        uses: $/actions/pr-title
         with:
           title: "fix: handle empty config"
       # Negative case: proves the env→arg wiring actually rejects (a regression
@@ -96,7 +96,7 @@ jobs:
       - name: pr-title action (invalid — must fail)
         id: badtitle
         continue-on-error: true
-        uses: ./actions/pr-title
+        uses: $/actions/pr-title
         with:
           title: "not a conventional title"
       - name: assert invalid title was rejected
@@ -111,10 +111,10 @@ jobs:
   auto-release-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - run: bash actions/auto-release/test_gate.sh
         shell: bash
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install "PyYAML==6.0.2"
@@ -128,7 +128,7 @@ jobs:
   darwin-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - run: bash actions/darwin-gate/test_darwin_gate.sh
         shell: bash
 
@@ -137,7 +137,7 @@ jobs:
   macos-codesign-setup:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - run: bash actions/macos-codesign-setup/test_gate.sh
         shell: bash
 
@@ -145,7 +145,7 @@ jobs:
   homebrew-alias:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - run: bash actions/homebrew-alias/test_alias.sh
         shell: bash
 
@@ -153,8 +153,8 @@ jobs:
   release-preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install "PyYAML==6.0.2" "pytest>=8,<9"
@@ -168,8 +168,8 @@ jobs:
   winget-submit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install "PyYAML==6.0.2" "pytest>=8,<9"
@@ -183,8 +183,8 @@ jobs:
   chocolatey-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install "pytest>=8,<9" "defusedxml==0.7.1"
@@ -197,8 +197,8 @@ jobs:
   identity-unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install "PyYAML==6.0.2" "pytest>=8,<9" "defusedxml==0.7.1"
@@ -215,7 +215,7 @@ jobs:
       matrix:
         fixture: [slck, gro, nrq, jtk, google-cli]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./actions/identity-check
         with:
           working-directory: tests/fixtures/identity/${{ matrix.fixture }}
@@ -230,7 +230,7 @@ jobs:
   identity-monorepo:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: ./actions/identity-check
         with:
           working-directory: tests/fixtures/identity/monorepo/tools/cfl
@@ -240,7 +240,7 @@ jobs:
   identity-interface:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - id: export
         uses: ./actions/identity-check
         with:
