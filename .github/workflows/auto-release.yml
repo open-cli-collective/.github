@@ -36,7 +36,7 @@ jobs:
   auto-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -45,10 +45,11 @@ jobs:
       # validate identity AND export the normalized manifest (single source of
       # tag prefix + version file). validate-and-export fails here if identity
       # drifted on main — don't mint a tag against a bad manifest.
-      # NOTE: @v1 must be cut (rollout step #8) before any caller can use this
-      # workflow; until then these action refs won't resolve.
+      # Nested shared actions use the self-repository form so GitHub resolves them
+      # from the exact commit that supplied this reusable workflow. This requires
+      # an Actions runner at version 2.336.0 or newer.
       - id: identity
-        uses: open-cli-collective/.github/actions/identity-check@v1
+        uses: $/actions/identity-check
         with:
           manifest-path: ${{ inputs.manifest-path }}
           working-directory: ${{ inputs.working-directory }}
@@ -76,7 +77,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - id: gate
-        uses: open-cli-collective/.github/actions/auto-release@v1
+        uses: $/actions/auto-release
         with:
           release-paths: ${{ inputs.release-paths }}
           tool-paths: ${{ inputs.tool-paths }}
