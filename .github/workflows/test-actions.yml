@@ -141,11 +141,13 @@ jobs:
       - run: bash actions/macos-codesign-setup/test_gate.sh
         shell: bash
 
-  # homebrew alias-cask rendering (token rename, verbatim url/checksum copy).
+  # Homebrew cask modernization and alias rendering.
   homebrew-alias:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - run: bash actions/homebrew-alias/test_modernize.sh
+        shell: bash
       - run: bash actions/homebrew-alias/test_alias.sh
         shell: bash
 
