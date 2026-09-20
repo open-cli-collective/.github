@@ -32,6 +32,8 @@ Local convenience copy, if present: `../.github/.github/workflows/auto-release.y
 The repo-axis policy and behavior belong in `cli-common`; this repository
 contains the automation that implements those standards.
 
+- [Privacy Policy](privacy-policy.md)
+
 ```md
 Source of truth: https://github.com/open-cli-collective/cli-common/blob/main/docs/ci.md
 Local convenience copy, if present: `../cli-common/docs/ci.md`
