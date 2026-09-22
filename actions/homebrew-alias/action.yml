@@ -1,7 +1,7 @@
 name: Homebrew tap publish (canonical + aliases)
 description: >
-  Publish the goreleaser-rendered canonical cask plus its manifest-declared
-  alias casks to the Homebrew tap in ONE commit. goreleaser must run with
+  Modernize and publish the goreleaser-rendered canonical cask plus its
+  manifest-declared alias casks to the Homebrew tap in ONE commit. goreleaser must run with
   skip_upload:true for the cask (asserted by the release preflight) so this
   step is the single writer — canonical and aliases land atomically.
 inputs:
@@ -41,7 +41,9 @@ runs:
       run: |
         set -euo pipefail
         render="$ACTION_PATH/alias.sh"
+        modernize="$ACTION_PATH/modernize.sh"
         [ -f "$render" ] || { echo "::error::alias.sh not found at $render"; exit 1; }
+        [ -f "$modernize" ] || { echo "::error::modernize.sh not found at $modernize"; exit 1; }
         # pilot item (a): the canonical cask MUST be present in dist/ — a missing
         # one means goreleaser didn't render it (skip_upload misconfig or build
         # gap). Hard-fail rather than push a partial tap.
@@ -61,12 +63,18 @@ runs:
         dest="$tmp/tap/$CASK_DIR"
         mkdir -p "$dest"
 
-        # canonical: verbatim copy
-        cp "$CANONICAL_FILE" "$dest/${CANONICAL_TOKEN}.rb"
+        # GoReleaser 2.18 still emits deprecated preflight/postflight stanza
+        # names. Normalize once, then derive both canonical and aliases from
+        # the same modern cask so a future release cannot restore warnings.
+        normalized="$tmp/${CANONICAL_TOKEN}.rb"
+        bash "$modernize" render "$CANONICAL_FILE" > "$normalized"
+
+        # canonical: normalized copy
+        cp "$normalized" "$dest/${CANONICAL_TOKEN}.rb"
         echo "rendered canonical: ${CANONICAL_TOKEN}.rb"
         # aliases: same artifact, only the cask stanza token renamed
         for a in $ALIAS_TOKENS; do
-          bash "$render" render "$CANONICAL_FILE" "$CANONICAL_TOKEN" "$a" > "$dest/${a}.rb"
+          bash "$render" render "$normalized" "$CANONICAL_TOKEN" "$a" > "$dest/${a}.rb"
           echo "rendered alias: ${a}.rb"
         done
 
