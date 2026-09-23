@@ -27,9 +27,10 @@ render() {
     /^[[:space:]]*system_command[[:space:]]+/ {
       sub(/system_command[[:space:]]+/, "run ")
     }
-    /"#\{staged_path\}\// {
-      sub(/"#\{staged_path\}\//, "\"")
-      sub(/\][[:space:]]*$/, "], base: :staged_path")
+    # base: resolves only the command path, never args, so a staged path in
+    # args has to stay absolute through the install-step template token.
+    /#\{staged_path\}/ {
+      gsub(/#\{staged_path\}/, "{{staged_path}}")
     }
     { print }
   ' "$file"
