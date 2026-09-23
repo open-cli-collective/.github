@@ -31,8 +31,10 @@ for stanza in preflight_steps postflight_steps uninstall_preflight_steps uninsta
 done
 echo "$out" | grep -q '^  # postflight do must not change inside a comment$' \
   && ok "comment preserved" || bad "comment preserved"
-echo "$out" | grep -q 'run "/usr/bin/xattr", args: \["-dr", "com.apple.quarantine", "example"\], base: :staged_path' \
+echo "$out" | grep -qF 'run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{staged_path}}/example"]' \
   && ok "command converted to install-step DSL" || bad "command converted to install-step DSL"
+echo "$out" | grep -q 'base: :staged_path' \
+  && bad "staged path must not move to base:" || ok "staged path kept in args"
 echo "$out" | grep -q 'system_command' \
   && bad "legacy command should be absent" || ok "legacy command absent"
 
