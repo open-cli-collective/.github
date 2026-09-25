@@ -204,6 +204,15 @@ jobs:
       - run: ./actions/chocolatey-render/test_render.ps1
         shell: pwsh
 
+  # Release asset resolution: exercise the real cfl GoReleaser metadata shape
+  # and verify missing architecture artifacts fail before release fan-out.
+  release-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - run: bash actions/release-assets/test_resolve.sh
+        shell: bash
+
   # identity.py unit tests — PASS + every drift rule + missing-manifest, in tmp dirs.
   identity-unit:
     runs-on: ubuntu-latest
