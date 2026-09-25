@@ -352,7 +352,8 @@ jobs:
       CHOCO_DIR: ${{ matrix.dir }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Get checksums from release
+      - id: checksums
+        name: Get checksums from release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -365,25 +366,22 @@ jobs:
           if (-not $arm64Hash) { Write-Error "no checksum for $env:ARM64_ASSET in checksums.txt"; exit 1 }
           echo "X64_HASH=$x64Hash" >> $env:GITHUB_ENV
           echo "ARM64_HASH=$arm64Hash" >> $env:GITHUB_ENV
-      - name: Update version and checksums
-        shell: pwsh
-        # paths are tool-local: working-directory-relative so a monorepo's
-        # tools/<tool>/packaging/chocolatey resolves (flat repos pass ".").
-        working-directory: ${{ inputs.working-directory }}
-        run: |
-          $nuspec = "$env:CHOCO_DIR/$env:CHOCO_ID.nuspec"
-          $content = Get-Content $nuspec -Raw
-          # fail loud if the placeholder isn't present — a silent no-op would pack the wrong version
-          if ($content -notmatch '<version>0\.0\.0</version>') { Write-Error "nuspec $nuspec has no <version>0.0.0</version> placeholder"; exit 1 }
-          $content -replace '<version>0.0.0</version>', "<version>$env:VERSION</version>" | Set-Content $nuspec
-          $script = "$env:CHOCO_DIR/tools/chocolateyInstall.ps1"
-          $content = Get-Content $script -Raw
-          # fail loud if a placeholder is absent — a silent no-op would push literal placeholders
-          if ($content -notmatch 'CHECKSUM_AMD64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_AMD64_PLACEHOLDER"; exit 1 }
-          if ($content -notmatch 'CHECKSUM_ARM64_PLACEHOLDER') { Write-Error "$script has no CHECKSUM_ARM64_PLACEHOLDER"; exit 1 }
-          $content = $content -replace 'CHECKSUM_AMD64_PLACEHOLDER', $env:X64_HASH
-          $content = $content -replace 'CHECKSUM_ARM64_PLACEHOLDER', $env:ARM64_HASH
-          Set-Content $script $content
+          echo "x64-hash=$x64Hash" >> $env:GITHUB_OUTPUT
+          echo "arm64-hash=$arm64Hash" >> $env:GITHUB_OUTPUT
+      - id: render
+        name: Update version, checksums, and download URLs
+        uses: $/actions/chocolatey-render
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          package-directory: ${{ matrix.dir }}
+          package-id: ${{ matrix.id }}
+          version: ${{ needs.goreleaser.outputs.version }}
+          repository: ${{ github.repository }}
+          final-tag: ${{ needs.goreleaser.outputs.final-tag }}
+          x64-asset: ${{ matrix.x64_asset }}
+          arm64-asset: ${{ matrix.arm64_asset }}
+          x64-hash: ${{ steps.checksums.outputs.x64-hash }}
+          arm64-hash: ${{ steps.checksums.outputs.arm64-hash }}
       - name: Pack and push
         uses: $/actions/chocolatey-push
         with:
@@ -391,6 +389,7 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
           package-directory: ${{ matrix.dir }}
           api-key: ${{ secrets.chocolatey-api-key }}
+          require-static-urls: ${{ steps.render.outputs.static-urls }}
 
   # winget/linux are best-effort: Microsoft-hosted flakiness must not gate the
   # binary/Homebrew artifacts. Failure surfaces in the step summary.
