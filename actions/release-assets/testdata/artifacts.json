@@ -1,0 +1,4 @@
+[
+  {"type":"Archive","goos":"windows","goarch":"amd64","name":"cfl_1.3.97-SNAPSHOT-abc1234_windows_amd64.zip","extra":{"Binaries":["cfl.exe"],"ID":"default"}},
+  {"type":"Archive","goos":"windows","goarch":"arm64","name":"cfl_1.3.97-SNAPSHOT-abc1234_windows_arm64.zip","extra":{"Binaries":["cfl.exe"],"ID":"default"}}
+]

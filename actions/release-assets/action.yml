@@ -1,0 +1,40 @@
+name: Resolve release assets
+description: Resolve exact Windows archive names for release channels.
+inputs:
+  artifacts-path:
+    description: Path to the GoReleaser artifacts.json file.
+    required: false
+    default: dist/artifacts.json
+  metadata-path:
+    description: Path to the GoReleaser metadata.json file.
+    required: false
+    default: dist/metadata.json
+  chocolatey-matrix:
+    description: JSON array of Chocolatey binary entries from identity metadata.
+    required: true
+  winget-matrix:
+    description: JSON array of WinGet binary entries from identity metadata.
+    required: true
+  version:
+    description: Final release version used to rename snapshot asset names.
+    required: true
+outputs:
+  chocolatey-matrix:
+    description: Chocolatey entries enriched with x64_asset and arm64_asset.
+    value: ${{ steps.resolve.outputs.chocolatey-matrix }}
+  winget-matrix:
+    description: WinGet entries enriched with x64_asset and arm64_asset.
+    value: ${{ steps.resolve.outputs.winget-matrix }}
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        ARTIFACTS_PATH: ${{ inputs.artifacts-path }}
+        METADATA_PATH: ${{ inputs.metadata-path }}
+        CHOCOLATEY: ${{ inputs.chocolatey-matrix }}
+        WINGET: ${{ inputs.winget-matrix }}
+        VERSION: ${{ inputs.version }}
+      run: bash "$ACTION_PATH/resolve.sh"
