@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -18,6 +20,9 @@ HTTP_TIMEOUT_SECONDS = 30
 CHOCO_SOURCE = "https://push.chocolatey.org/"
 COMMUNITY_API = "https://community.chocolatey.org/api/v2"
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
+URL_PLACEHOLDERS = ("URL_AMD64_PLACEHOLDER", "URL_ARM64_PLACEHOLDER")
+CHECKSUM_PLACEHOLDERS = ("CHECKSUM_AMD64_PLACEHOLDER", "CHECKSUM_ARM64_PLACEHOLDER")
+RUNTIME_VERSION_EXPRESSION = re.compile(r"(?i)ChocolateyPackageVersion|\$\{\s*version\s*\}")
 
 
 class PushError(Exception):
@@ -64,6 +69,7 @@ def pack_and_push(
     command_runner=None,
     http_get=None,
     summary_path: str | None = None,
+    require_static_urls: bool = False,
 ) -> int:
     if not api_key:
         raise PushError("chocolatey-api-key secret is required")
@@ -77,6 +83,8 @@ def pack_and_push(
     packages = sorted(choco_dir.glob("*.nupkg"))
     if len(packages) != 1:
         raise PushError(f"expected exactly one .nupkg, found {len(packages)}")
+    if require_static_urls:
+        validate_static_package(packages[0])
 
     push = run_command(
         [
@@ -113,6 +121,28 @@ def pack_and_push(
     print(f"::warning::{message}")
     _write_summary(summary_path, f"WARNING: {message}")
     return 0
+
+
+def validate_static_package(package: Path) -> None:
+    """Reject migrated packages that still defer release URLs to install time."""
+    try:
+        with zipfile.ZipFile(package) as archive:
+            scripts = [name for name in archive.namelist() if name.lower().endswith((".ps1", ".nuspec"))]
+            if not scripts:
+                raise PushError(f"{package.name} contains no Chocolatey scripts or nuspec")
+            if not any(name.replace("\\", "/").rsplit("/", 1)[-1].lower() == "chocolateyinstall.ps1" for name in scripts):
+                raise PushError(f"{package.name} does not contain tools/chocolateyInstall.ps1")
+            for name in scripts:
+                # Windows PowerShell 5.1 may pack UTF-16 scripts; removing its
+                # NUL padding keeps the token checks encoding-independent.
+                text = archive.read(name).decode("utf-8", errors="replace").replace("\x00", "")
+                leftovers = [token for token in URL_PLACEHOLDERS + CHECKSUM_PLACEHOLDERS if token in text]
+                if leftovers:
+                    raise PushError(f"{package.name}/{name} retains placeholders: {', '.join(leftovers)}")
+                if RUNTIME_VERSION_EXPRESSION.search(text):
+                    raise PushError(f"{package.name}/{name} retains a runtime package-version expression")
+    except zipfile.BadZipFile as exc:
+        raise PushError(f"cannot inspect invalid Chocolatey package {package.name}") from exc
 
 
 def run_command(command: list[str], cwd: Path, command_runner=None) -> CommandResult:
@@ -211,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     push.add_argument("--working-directory", default=".")
     push.add_argument("--package-directory", default="packaging/chocolatey")
     push.add_argument("--api-key-env", default="CHOCO_API_KEY")
+    push.add_argument("--require-static-urls", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -220,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
                 working_dir=args.working_directory,
                 package_dir=args.package_directory,
                 api_key=os.environ.get(args.api_key_env, ""),
+                require_static_urls=args.require_static_urls,
             )
     except (PushError, ProbeError) as exc:
         print(f"::error::{exc}", file=sys.stderr)

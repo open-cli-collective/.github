@@ -1,3 +1,4 @@
+import zipfile
 from types import SimpleNamespace
 from urllib.error import URLError
 
@@ -99,6 +100,64 @@ def test_pack_failure_fails_release(tmp_path):
             api_key="key",
             command_runner=runner,
         )
+
+
+@pytest.mark.parametrize(
+    "script, encoding, error",
+    [
+        ("$url = 'URL_AMD64_PLACEHOLDER'", "utf-8", "retains placeholders"),
+        ("$url = 'https://example.test/$env:ChocolateyPackageVersion'", "utf-16", "runtime package-version"),
+    ],
+)
+def test_static_package_validation_rejects_unrendered_install_script(tmp_path, script, encoding, error):
+    work = _working_dir(tmp_path)
+    calls = []
+
+    def runner(command, cwd, **_kwargs):
+        calls.append(command)
+        if command == ["choco", "pack"]:
+            with zipfile.ZipFile(cwd / "codereview-cli.1.0.0.nupkg", "w") as archive:
+                archive.writestr("tools/chocolateyInstall.ps1", script.encode(encoding))
+            return _result(0)
+        raise AssertionError("static package validation must run before choco push")
+
+    with pytest.raises(chocolatey_push.PushError, match=error):
+        chocolatey_push.pack_and_push(
+            package_id="codereview-cli",
+            working_dir=work,
+            api_key="key",
+            command_runner=runner,
+            require_static_urls=True,
+        )
+    assert calls == [["choco", "pack"]]
+
+
+def test_static_package_validation_accepts_rendered_package(tmp_path):
+    package = tmp_path / "package.nupkg"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr(
+            "tools/chocolateyInstall.ps1",
+            "\n".join(
+                [
+                    "$url64 = 'https://github.com/open-cli-collective/example/releases/download/v1.2.3/example-amd64.zip'",
+                    "$urlArm64 = 'https://github.com/open-cli-collective/example/releases/download/v1.2.3/example-arm64.zip'",
+                    "$checksum64 = 'a' * 64",
+                    "$checksumArm64 = 'b' * 64",
+                ]
+            ),
+        )
+        archive.writestr("example.nuspec", "<version>1.2.3</version>")
+
+    assert chocolatey_push.validate_static_package(package) is None
+
+
+def test_static_package_validation_requires_install_script(tmp_path):
+    package = tmp_path / "package.nupkg"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("example.nuspec", "<version>1.2.3</version>")
+
+    with pytest.raises(chocolatey_push.PushError, match="chocolateyInstall.ps1"):
+        chocolatey_push.validate_static_package(package)
 
 
 def test_non_forbidden_push_failure_fails_release(tmp_path):

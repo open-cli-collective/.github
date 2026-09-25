@@ -1,0 +1,68 @@
+name: Render Chocolatey package
+description: Inject the release version, checksums, and optional static asset URLs into a Chocolatey package.
+inputs:
+  working-directory:
+    description: Repository-relative tool working directory.
+    required: false
+    default: "."
+  package-directory:
+    description: Chocolatey package directory relative to working-directory.
+    required: true
+  package-id:
+    description: Chocolatey package id.
+    required: true
+  version:
+    description: Release version for the nuspec.
+    required: true
+  repository:
+    description: GitHub repository containing the release assets, owner/name.
+    required: true
+  final-tag:
+    description: GitHub release tag containing the published assets.
+    required: true
+  x64-asset:
+    description: Published AMD64 Windows asset name.
+    required: true
+  arm64-asset:
+    description: Published ARM64 Windows asset name.
+    required: true
+  x64-hash:
+    description: SHA256 for the AMD64 Windows asset.
+    required: true
+  arm64-hash:
+    description: SHA256 for the ARM64 Windows asset.
+    required: true
+outputs:
+  static-urls:
+    description: true when both URL placeholders were rendered into literal release URLs.
+    value: ${{ steps.render.outputs.static-urls }}
+runs:
+  using: composite
+  steps:
+    - id: render
+      shell: pwsh
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        PACKAGE_DIRECTORY: ${{ inputs.package-directory }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ inputs.version }}
+        GITHUB_REPOSITORY: ${{ inputs.repository }}
+        FINAL_TAG: ${{ inputs.final-tag }}
+        X64_ASSET: ${{ inputs.x64-asset }}
+        ARM64_ASSET: ${{ inputs.arm64-asset }}
+        X64_HASH: ${{ inputs.x64-hash }}
+        ARM64_HASH: ${{ inputs.arm64-hash }}
+      run: |
+        & "$env:ACTION_PATH/render.ps1" `
+          -WorkingDirectory "$env:WORKING_DIRECTORY" `
+          -PackageDirectory "$env:PACKAGE_DIRECTORY" `
+          -PackageId "$env:PACKAGE_ID" `
+          -Version "$env:VERSION" `
+          -Repository "$env:GITHUB_REPOSITORY" `
+          -FinalTag "$env:FINAL_TAG" `
+          -X64Asset "$env:X64_ASSET" `
+          -Arm64Asset "$env:ARM64_ASSET" `
+          -X64Hash "$env:X64_HASH" `
+          -Arm64Hash "$env:ARM64_HASH" `
+          -GitHubOutput "$env:GITHUB_OUTPUT"
