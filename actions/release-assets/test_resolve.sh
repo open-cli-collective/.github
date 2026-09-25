@@ -2,29 +2,17 @@
 # Exercise the same release asset resolver used by release.yml.
 set -uo pipefail
 cd "$(dirname "$0")"
+fixture_dir="$PWD/testdata"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fails=0
 ok() { echo "ok   $1"; }
 bad() { echo "FAIL $1"; fails=$((fails+1)); }
 
-cat > "$tmp/metadata.json" <<'JSON'
-{"version":"1.3.97-SNAPSHOT-abc1234"}
-JSON
-
-# This is the cfl 1.3.97 GoReleaser shape: the manifest name is cfl, the
-# archive owner ID is default, and Binaries contains cfl.exe.
-cat > "$tmp/artifacts.json" <<'JSON'
-[
-  {"type":"Archive","goos":"windows","goarch":"amd64","name":"cfl_1.3.97-SNAPSHOT-abc1234_windows_amd64.zip","extra":{"Binaries":["cfl.exe"],"ID":"default"}},
-  {"type":"Archive","goos":"windows","goarch":"arm64","name":"cfl_1.3.97-SNAPSHOT-abc1234_windows_arm64.zip","extra":{"Binaries":["cfl.exe"],"ID":"default"}}
-]
-JSON
-
 output="$tmp/output"
 GITHUB_OUTPUT="$output" \
-ARTIFACTS_PATH="$tmp/artifacts.json" \
-METADATA_PATH="$tmp/metadata.json" \
+ARTIFACTS_PATH="$fixture_dir/artifacts.json" \
+METADATA_PATH="$fixture_dir/metadata.json" \
 CHOCOLATEY='[{"name":"cfl","id":"confluence-cli","dir":"packaging/chocolatey"}]' \
 WINGET='[]' \
 VERSION='1.3.97' \
@@ -40,10 +28,10 @@ printf '%s' "$matrix" | jq -e '
   && ok "cfl .exe artifacts resolve to exact per-arch assets" \
   || bad "cfl .exe artifacts resolve to exact per-arch assets"
 
-jq 'map(select(.goarch != "amd64"))' "$tmp/artifacts.json" > "$tmp/missing-amd64.json"
+jq 'map(select(.goarch != "amd64"))' "$fixture_dir/artifacts.json" > "$tmp/missing-amd64.json"
 if GITHUB_OUTPUT="$tmp/missing-output" \
   ARTIFACTS_PATH="$tmp/missing-amd64.json" \
-  METADATA_PATH="$tmp/metadata.json" \
+  METADATA_PATH="$fixture_dir/metadata.json" \
   CHOCOLATEY='[{"name":"cfl","id":"confluence-cli","dir":"packaging/chocolatey"}]' \
   WINGET='[]' \
   VERSION='1.3.97' \
