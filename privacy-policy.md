@@ -4,13 +4,41 @@ This Privacy Policy applies to the open-source projects maintained by **Open CLI
 
 ## Data Collection
 
-Open CLI Collective projects do not intentionally collect, store, sell, or share personal information.
+Except where a project-specific section below says otherwise, Open CLI Collective projects do not operate a hosted service that intentionally collects, stores, sells, or shares personal information.
 
 Some projects may interact with third-party services, APIs, platforms, or hosting providers. Those services may collect information according to their own privacy policies. Open CLI Collective does not control their data practices.
 
 If you interact with our projects through GitHub, GitHub may collect information according to its own privacy policy.
 
 Information you voluntarily provide through issues, discussions, pull requests, or other communications may be publicly visible and may be used as necessary to maintain the projects or respond to you.
+
+## Google CLI (`gro` and `grw`)
+
+This section applies to the unofficial `gro` (Google read-oriented) and `grw` (Google read-write) command-line tools in [open-cli-collective/google-cli](https://github.com/open-cli-collective/google-cli). They are independent open-source software and are not affiliated with, sponsored by, endorsed by, or certified by Google.
+
+### Google account data and scopes
+
+During setup, each tool asks the user to authorize a Google OAuth client. `gro` requests access for Gmail organization, Calendar events, Contacts, the signed-in profile, and Drive metadata and files. Its Gmail scope permits reading and non-destructive organization such as labels, archiving, starring, and read/unread changes; it does not request Gmail settings or full-mail access for permanent deletion. `grw` requests the `gro` access plus Gmail filter management, full Gmail access for its explicitly confirmed permanent-delete path, Calendar event writes, Contacts changes, and full Drive operations. The exact consent screen and granted permissions are controlled by Google and the OAuth client selected by the user.
+
+Commands send requests directly from the user's machine to Google APIs. The project does not provide a hosted proxy or account-data service. The tools do not send account data to Open CLI Collective. OAuth tokens are read and written through the credential provider selected for that local installation; depending on the operating system and configuration, this is macOS Keychain, Windows Credential Manager, Linux Secret Service, or the optional encrypted-file backend. The provider's own privacy and retention practices apply.
+
+### Local storage
+
+The tools keep separate local state for `gro` and `grw`, and each tool can keep multiple named profiles:
+
+- Configuration records the active profile, profile-to-client-file paths, and the OAuth scopes recorded for each profile.
+- The OAuth client JSON supplied during setup is stored as a local file (deployment material), including when the tools reuse a client file between the two binaries. It is not the access token store.
+- Access and refresh tokens are stored under the tool and profile in the selected credential provider. Tokens are not written to the normal configuration or cache files.
+- A verified Google account email and verification time may be stored in the local cache so `profiles list` can identify a profile without another API request.
+- `gro` may store a disposable shared-Drive metadata cache locally. It is scoped by profile and is treated as stale after its configured cache lifetime; it can be rebuilt from Google.
+
+The tools do not impose a server-side retention period because Open CLI Collective does not receive this local state. It remains on the user's machine or credential provider until the user removes it. Google retains account data and OAuth grants under Google's policies.
+
+### Removing local data and revoking access
+
+`config clear` removes the OAuth token for the active profile. `config clear --all` also removes that binary's configuration files and local cache, but deliberately leaves the OAuth client JSON and does not remove tokens belonging to other profiles. Select each profile when clearing it. `gro` and `grw` use different configuration directories and credential-provider namespaces, so repeat the cleanup for both binaries when both were used. To remove all local state, delete the remaining client JSON files and credential-provider entries as well.
+
+To stop Google access, revoke the tool's OAuth grant from the Google Account security page (third-party access), then clear the local tokens. Revocation is performed by Google; clearing local state alone does not revoke a grant that already exists at Google.
 
 ## Open-Source Software
 
