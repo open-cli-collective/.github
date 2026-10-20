@@ -4,14 +4,16 @@
 # Usage:
 #   modernize.sh render <cask-file>
 #       Print the cask with only deprecated install-step block declarations
-#       renamed. Already-modern casks pass through unchanged.
+#       renamed. Already-modern casks pass through unchanged. Fails when a
+#       system_command call is left that the rewrite could not convert.
 set -euo pipefail
 
 render() {
   local file="$1"
   [ -f "$file" ] || { echo "::error::cask not found: $file" >&2; return 1; }
 
-  awk '
+  local out
+  out=$(awk '
     /^[[:space:]]*preflight[[:space:]]+do[[:space:]]*$/ {
       sub(/preflight[[:space:]]+do[[:space:]]*$/, "preflight_steps do")
     }
@@ -33,7 +35,16 @@ render() {
       gsub(/#\{staged_path\}/, "{{staged_path}}")
     }
     { print }
-  ' "$file"
+  ' "$file")
+
+  # The install-step DSL has no system_command, so one left in place (an
+  # assignment such as `result = system_command ...`, which the line-start
+  # rewrite above skips) makes Homebrew reject the whole cask as invalid.
+  if printf '%s\n' "$out" | grep -nE '^[^#]*\bsystem_command\b' >&2; then
+    echo "::error::$file: system_command calls above cannot be converted to install steps; make each a bare system_command line" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
 }
 
 case "${1:-}" in
