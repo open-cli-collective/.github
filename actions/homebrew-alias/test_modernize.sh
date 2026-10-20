@@ -45,6 +45,10 @@ rerendered=$(bash modernize.sh render "$tmp/modern.rb")
 bash modernize.sh render "$tmp/missing.rb" >/dev/null 2>&1 \
   && bad "missing file should fail" || ok "missing file fails"
 
+printf 'cask "example" do\nend\n\n' > "$tmp/trailing.rb"
+cmp -s "$tmp/trailing.rb" <(bash modernize.sh render "$tmp/trailing.rb") \
+  && ok "trailing blank lines preserved" || bad "trailing blank lines preserved"
+
 cat > "$tmp/assigned.rb" <<'RB'
 cask "example" do
   postflight do
