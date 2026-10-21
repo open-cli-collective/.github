@@ -45,5 +45,19 @@ rerendered=$(bash modernize.sh render "$tmp/modern.rb")
 bash modernize.sh render "$tmp/missing.rb" >/dev/null 2>&1 \
   && bad "missing file should fail" || ok "missing file fails"
 
+printf 'cask "example" do\nend\n\n' > "$tmp/trailing.rb"
+cmp -s "$tmp/trailing.rb" <(bash modernize.sh render "$tmp/trailing.rb") \
+  && ok "trailing blank lines preserved" || bad "trailing blank lines preserved"
+
+cat > "$tmp/assigned.rb" <<'RB'
+cask "example" do
+  postflight do
+    result = system_command "#{staged_path}/example", args: ["refresh"], must_succeed: false
+  end
+end
+RB
+bash modernize.sh render "$tmp/assigned.rb" >/dev/null 2>&1 \
+  && bad "unconvertible system_command should fail" || ok "unconvertible system_command fails"
+
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "all modernization tests passed"; else echo "$fails failed"; exit 1; fi
