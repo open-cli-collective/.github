@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+import base64
+import datetime
 import json
 import os
-import subprocess
 import sys
 import tempfile
+import re
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -16,15 +19,15 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import yaml
+import jsonschema
+from packaging.version import InvalidVersion, Version
 
 MODE_UPDATE = "update"
 MODE_FIRST_SUBMISSION = "first-submission"
 MODE_MISSING_BOOTSTRAP_DISABLED = "missing-with-bootstrap-disabled"
 
-WINGETCREATE_RELEASE_URL = "https://api.github.com/repos/microsoft/winget-create/releases/latest"
 HTTP_TIMEOUT_SECONDS = 30
-WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS = 60
-WINGETCREATE_COMMAND_TIMEOUT_SECONDS = 300
+TARGET_MANIFEST_VERSION = "1.28.0"
 WINGET_MANIFEST_TYPES = {"version", "installer", "defaultLocale", "locale"}
 DEFAULT_X64_MARKER = "windows_amd64.zip"
 DEFAULT_ARM64_MARKER = "windows_arm64.zip"
@@ -51,12 +54,6 @@ class WindowsAsset:
 class WindowsAssets:
     x64: WindowsAsset
     arm64: WindowsAsset
-
-
-@dataclass(frozen=True)
-class DownloadAsset:
-    url: str
-    sha256: str
 
 
 def package_id_to_winget_path(package_id: str) -> str:
@@ -110,23 +107,6 @@ def load_release_assets(repo: str, final_tag: str, github_token: str) -> tuple[s
         if asset.get("browser_download_url")
     }
     return checksums_text, download_urls
-
-
-def load_wingetcreate_asset(github_token: str, request_json=None) -> DownloadAsset:
-    request_json = request_json or github_request_json
-    release = request_json(WINGETCREATE_RELEASE_URL, github_token)
-    for asset in release.get("assets") or []:
-        if asset.get("name") != "wingetcreate.exe":
-            continue
-        url = asset.get("browser_download_url")
-        digest = asset.get("digest") or ""
-        prefix = "sha256:"
-        if not url:
-            raise SubmitError("wingetcreate.exe release asset has no download URL")
-        if not digest.startswith(prefix):
-            raise SubmitError("wingetcreate.exe release asset has no SHA-256 digest")
-        return DownloadAsset(url=url, sha256=digest[len(prefix):])
-    raise SubmitError("wingetcreate.exe asset not found in microsoft/winget-create latest release")
 
 
 def resolve_windows_assets(
@@ -213,33 +193,167 @@ def render_bootstrap_manifests(
     return [dest for dest, _ in rendered]
 
 
-def build_update_command(wingetcreate: Path, package_id: str, version: str, assets: WindowsAssets, token: str) -> list[str]:
-    return [
-        str(wingetcreate),
-        "update",
-        package_id,
-        "--version",
-        version,
-        "--urls",
-        assets.x64.url,
-        assets.arm64.url,
-        "--submit",
-        "--token",
-        token,
-    ]
+def upgrade_generated_manifests(directory: Path, package_id: str, version: str) -> list[Path]:
+    """Upgrade generated manifests without passing them through the old serializer again."""
+    paths = sorted(directory.glob("*.yaml"))
+    types = set()
+    for path in paths:
+        data = _load_manifest(path, package_id)
+        if str(data["PackageVersion"]) != version:
+            raise SubmitError(f"{path}: unexpected package version")
+        types.add(data.get("ManifestType"))
+        try:
+            if Version(str(data.get("ManifestVersion", ""))) > Version(TARGET_MANIFEST_VERSION):
+                raise SubmitError(f"{path}: refusing to downgrade newer manifest schema")
+        except InvalidVersion as exc:
+            raise SubmitError(f"{path}: invalid manifest schema version") from exc
+        data["ManifestVersion"] = TARGET_MANIFEST_VERSION
+        path.write_text(_dump_manifest(data, path), encoding="utf-8")
+    if not {"version", "installer", "defaultLocale"}.issubset(types):
+        raise SubmitError(f"{directory}: incomplete generated manifests")
+    return paths
 
 
-def build_submit_command(wingetcreate: Path, package_id: str, version: str, rendered_dir: Path, token: str) -> list[str]:
-    return [
-        str(wingetcreate),
-        "submit",
-        "--prtitle",
-        f"New package: {package_id} version {version}",
-        "--token",
-        token,
-        "--no-open",
-        str(rendered_dir),
-    ]
+def render_update_manifests(directory: Path, package_id: str, version: str, assets: WindowsAssets, token: str) -> list[Path]:
+    """Copy latest published manifests and update only the release-specific fields."""
+    package_path = package_id_to_winget_path(package_id)
+    base_url = f"https://api.github.com/repos/microsoft/winget-pkgs/contents/{quote(package_path, safe='/')}"
+    entries = github_request_json(base_url, token)
+    versions = []
+    for item in entries:
+        if item.get("type") != "dir":
+            continue
+        try:
+            versions.append((Version(item["name"]), item["name"]))
+        except InvalidVersion as exc:
+            raise SubmitError(f"cannot safely compare existing package version {item['name']!r}") from exc
+    if not versions:
+        raise SubmitError("existing package has no version directories")
+    try:
+        if Version(version) <= max(versions)[0]:
+            raise SubmitError(f"{version} is not newer than latest published version {max(versions)[1]}")
+    except InvalidVersion as exc:
+        raise SubmitError(f"cannot compare new package version {version!r}") from exc
+    current = max(versions)[1]
+    listing = github_request_json(f"{base_url}/{quote(current, safe='')}", token)
+    directory.mkdir(parents=True, exist_ok=True)
+    output = []
+    types = set()
+    for item in listing:
+        name = item.get("name", "")
+        if not name.endswith(".yaml") or not name.startswith(package_id + "."):
+            continue
+        response = github_request_json(item["url"], token)
+        data = yaml.safe_load(base64.b64decode(response["content"]))
+        if not isinstance(data, dict) or data.get("PackageIdentifier") != package_id:
+            raise SubmitError(f"{name}: invalid package identifier or manifest")
+        if str(data.get("PackageVersion")) != current:
+            raise SubmitError(f"{name}: unexpected package version")
+        kind = data.get("ManifestType")
+        if kind not in WINGET_MANIFEST_TYPES or kind in types and kind != "locale":
+            raise SubmitError(f"{name}: unexpected or duplicate manifest type")
+        types.add(kind)
+        try:
+            if Version(str(data.get("ManifestVersion", ""))) > Version(TARGET_MANIFEST_VERSION):
+                raise SubmitError(f"{name}: refusing to downgrade newer manifest schema")
+        except InvalidVersion as exc:
+            raise SubmitError(f"{name}: invalid manifest schema version") from exc
+        data["PackageVersion"] = version
+        if kind in {"defaultLocale", "locale"}:
+            data.pop("ReleaseNotes", None)
+            data.pop("ReleaseNotesUrl", None)
+        if kind == "installer":
+            data.pop("ReleaseDate", None)
+            if "InstallerUrl" in data or "InstallerSha256" in data:
+                raise SubmitError("root-level installer URL or hash requires manual update")
+            installers = data.get("Installers")
+            if not isinstance(installers, list) or len(installers) != 2 or sorted(i.get("Architecture", "") for i in installers if isinstance(i, dict)) != ["arm64", "x64"]:
+                raise SubmitError("expected exactly one x64 and one arm64 installer; refusing automatic update")
+            for installer in installers:
+                installer.pop("ReleaseDate", None)
+            _update_installer_manifest(data, assets)
+        data["ManifestVersion"] = TARGET_MANIFEST_VERSION
+        dest = directory / name
+        dest.write_text(_dump_manifest(data, dest), encoding="utf-8")
+        output.append(dest)
+    if not {"version", "installer", "defaultLocale"}.issubset(types):
+        raise SubmitError("existing package does not have a complete set of multifile manifests")
+    return output
+
+
+def validate_manifests(files: list[Path]) -> None:
+    schemas = {}
+    for path in files:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        kind = data["ManifestType"]
+        if kind not in schemas:
+            url = f"https://aka.ms/winget-manifest.{kind}.{TARGET_MANIFEST_VERSION}.schema.json"
+            with urlopen(Request(url, headers={"User-Agent": "open-cli-collective-winget-submit"}), timeout=HTTP_TIMEOUT_SECONDS) as response:
+                schemas[kind] = json.load(response)
+        # PyYAML recognizes dates; the schema expects their textual YAML representation.
+        instance = json.loads(json.dumps(data, default=lambda value: value.isoformat() if isinstance(value, (datetime.date, datetime.datetime)) else str(value)))
+        try:
+            jsonschema.Draft7Validator(schemas[kind]).validate(instance)
+        except jsonschema.ValidationError as exc:
+            raise SubmitError(f"{path.name}: schema validation failed at {'.'.join(map(str, exc.absolute_path))}: {exc.message}") from exc
+
+
+def github_api(url: str, token: str, method: str = "GET", payload=None):
+    request = _github_request(url, token, "application/vnd.github+json")
+    request.method = method
+    if payload is not None:
+        request.data = json.dumps(payload).encode("utf-8")
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise GitHubAPIError(exc.code, exc.read().decode("utf-8", "replace")) from exc
+    except (URLError, OSError) as exc:
+        raise GitHubAPIError(None, str(exc)) from exc
+
+
+def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: str, *, new_package: bool, upstream_repo: str = "microsoft/winget-pkgs", expected_fork_parent: str = "microsoft/winget-pkgs"):
+    """Create an upstream PR from a fresh tree based on the current upstream commit."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", package_id) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+-]*", version):
+        raise SubmitError("invalid package ID or version")
+    api = "https://api.github.com"
+    user = github_api(f"{api}/user", token)["login"]
+    fork_url = f"{api}/repos/{quote(user, safe='')}/winget-pkgs"
+    try:
+        fork = github_api(fork_url, token)
+    except GitHubAPIError as exc:
+        if exc.status != 404:
+            raise
+        github_api(f"{api}/repos/{upstream_repo}/forks", token, "POST", {"default_branch_only": True})
+        fork = None
+        for _ in range(20):
+            time.sleep(3)
+            try:
+                fork = github_api(fork_url, token)
+                break
+            except GitHubAPIError as error:
+                if error.status != 404:
+                    raise
+        if fork is None:
+            raise SubmitError("winget-pkgs fork was not ready after 60 seconds")
+    if (fork.get("parent") or {}).get("full_name", "").lower() != expected_fork_parent.lower():
+        raise SubmitError(f"{user}/winget-pkgs is not a fork of {expected_fork_parent}")
+    upstream = github_api(f"{api}/repos/{upstream_repo}", token)
+    base = upstream["default_branch"]
+    head = github_api(f"{api}/repos/{upstream_repo}/git/ref/heads/{quote(base, safe='')}", token)["object"]["sha"]
+    commit = github_api(f"{api}/repos/{upstream_repo}/git/commits/{head}", token)
+    manifest_path = f"{package_id_to_winget_path(package_id)}/{version}"
+    tree = [{"path": f"{manifest_path}/{f.name}", "mode": "100644", "type": "blob", "content": f.read_text(encoding="utf-8")} for f in files]
+    tree_sha = github_api(f"{fork_url}/git/trees", token, "POST", {"base_tree": commit["tree"]["sha"], "tree": tree})["sha"]
+    message = f"{package_id} version {version}"
+    commit_sha = github_api(f"{fork_url}/git/commits", token, "POST", {"message": message, "tree": tree_sha, "parents": [head]})["sha"]
+    branch = f"open-cli-collective-{uuid.uuid4().hex}"
+    github_api(f"{fork_url}/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit_sha})
+    title = f"New package: {message}" if new_package else message
+    pr = github_api(f"{api}/repos/{upstream_repo}/pulls", token, "POST", {"title": title, "head": f"{user}:{branch}", "base": base, "body": f"Automated WinGet manifest submission for {message}."})
+    _write_summary(f"WinGet pull request: {pr['html_url']}")
+    return pr["html_url"]
 
 
 def github_request_json(url: str, token: str):
@@ -289,43 +403,16 @@ def run_submit(args) -> int:
         x64_marker=getattr(args, "x64_marker", DEFAULT_X64_MARKER),
         arm64_marker=getattr(args, "arm64_marker", DEFAULT_ARM64_MARKER),
     )
-    wingetcreate_asset = load_wingetcreate_asset(args.github_token)
-    wingetcreate = Path.cwd() / "wingetcreate.exe"
-    download_file(
-        wingetcreate_asset.url,
-        wingetcreate,
-        WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS,
-        wingetcreate_asset.sha256,
-    )
-
-    if mode == MODE_UPDATE:
-        subprocess.run(
-            build_update_command(wingetcreate, args.package_id, args.version, assets, args.winget_token),
-            check=True,
-            timeout=WINGETCREATE_COMMAND_TIMEOUT_SECONDS,
-        )
-        return 0
-
     with tempfile.TemporaryDirectory(prefix="winget-submit-") as tmp:
-        rendered_dir = Path(tmp)
-        render_bootstrap_manifests(
-            package_id=args.package_id,
-            version=args.version,
-            working_dir=args.working_dir,
-            output_dir=rendered_dir,
-            assets=assets,
-        )
-        subprocess.run(
-            build_submit_command(
-                wingetcreate,
-                args.package_id,
-                args.version,
-                rendered_dir,
-                args.winget_token,
-            ),
-            check=True,
-            timeout=WINGETCREATE_COMMAND_TIMEOUT_SECONDS,
-        )
+        root = Path(tmp)
+        rendered_dir = root / "rendered"
+        if mode == MODE_UPDATE:
+            files = render_update_manifests(rendered_dir, args.package_id, args.version, assets, args.github_token)
+        else:
+            files = render_bootstrap_manifests(package_id=args.package_id, version=args.version, working_dir=args.working_dir, output_dir=rendered_dir, assets=assets)
+            files = upgrade_generated_manifests(rendered_dir, args.package_id, args.version)
+        validate_manifests(files)
+        submit_manifest_pr(args.package_id, args.version, files, args.winget_token, new_package=mode == MODE_FIRST_SUBMISSION)
     return 0
 
 
@@ -397,28 +484,6 @@ def _github_request(url: str, token: str, accept: str) -> Request:
     return Request(url, headers=headers)
 
 
-def download_file(url: str, dest: Path, timeout_seconds: int, expected_sha256: str) -> None:
-    request = Request(url, headers={"User-Agent": "open-cli-collective-winget-submit"})
-    try:
-        hasher = hashlib.sha256()
-        with urlopen(request, timeout=timeout_seconds) as response:
-            with dest.open("wb") as fh:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    hasher.update(chunk)
-                    fh.write(chunk)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        raise SubmitError(f"failed to download {url}: {exc}") from exc
-    actual = hasher.hexdigest()
-    if actual.lower() != expected_sha256.lower():
-        dest.unlink(missing_ok=True)
-        raise SubmitError(
-            f"downloaded {url} checksum {actual} did not match expected {expected_sha256}"
-        )
-
-
 def _parse_bool(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
 
@@ -463,12 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     except GitHubAPIError as exc:
         print(f"::error::GitHub API request failed with status {exc.status}: {exc}", file=sys.stderr)
         return 1
-    except subprocess.TimeoutExpired as exc:
-        print(f"::error::wingetcreate timed out after {exc.timeout} seconds", file=sys.stderr)
-        return 1
-    except subprocess.CalledProcessError as exc:
-        print(f"::error::wingetcreate failed with exit code {exc.returncode}", file=sys.stderr)
-        return exc.returncode or 1
+
     return 2
 
 

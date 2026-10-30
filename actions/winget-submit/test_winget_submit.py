@@ -200,64 +200,6 @@ def test_cli_parses_configured_asset_markers(monkeypatch):
     assert received["arm64_marker"] == "windows-arm64-setup.exe"
 
 
-def test_load_wingetcreate_asset_uses_github_release_digest():
-    def request_json(url, token):
-        return {
-            "assets": [
-                {
-                    "name": "wingetcreate.exe",
-                    "browser_download_url": "https://example.test/wingetcreate.exe",
-                    "digest": "sha256:" + "a" * 64,
-                }
-            ]
-        }
-
-    asset = winget_submit.load_wingetcreate_asset("github-token", request_json=request_json)
-
-    assert asset.url == "https://example.test/wingetcreate.exe"
-    assert asset.sha256 == "a" * 64
-
-
-def test_download_file_rejects_sha256_mismatch(tmp_path, monkeypatch):
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(winget_submit, "urlopen", lambda request, timeout: Response(b"not the expected bytes"))
-    dest = tmp_path / "wingetcreate.exe"
-
-    with pytest.raises(winget_submit.SubmitError, match="checksum"):
-        winget_submit.download_file("https://example.test/wingetcreate.exe", dest, 1, "a" * 64)
-
-    assert not dest.exists()
-
-
-def test_download_file_accepts_matching_sha256(tmp_path, monkeypatch):
-    payload = b"expected bytes"
-
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(winget_submit, "urlopen", lambda request, timeout: Response(payload))
-    dest = tmp_path / "wingetcreate.exe"
-
-    winget_submit.download_file(
-        "https://example.test/wingetcreate.exe",
-        dest,
-        1,
-        hashlib.sha256(payload).hexdigest(),
-    )
-
-    assert dest.read_bytes() == payload
-
-
 def test_render_bootstrap_manifests_updates_values_without_mutating_source(tmp_path):
     package_id = "OpenCLICollective.codereview-cli"
     source = tmp_path / "tool"
@@ -438,163 +380,87 @@ def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
         )
 
 
-def test_run_submit_existing_package_uses_update_command_and_token_contexts(monkeypatch):
+def test_run_submit_existing_package_copies_upstream_manifests(monkeypatch):
     assets = _assets()
     calls = {}
-
-    def load_release_assets(repo, final_tag, github_token):
-        calls["load_release_assets"] = (repo, final_tag, github_token)
-        return "checksums", {"asset": "url"}
-
-    def resolve_windows_assets(checksums_text, release_assets, **_markers):
-        calls["resolve_windows_assets"] = (checksums_text, release_assets)
-        return assets
-
-    def package_exists(package_id, github_token):
-        calls["package_exists"] = (package_id, github_token)
-        return True
-
-    def download_file(url, dest, timeout_seconds, expected_sha256):
-        calls["download_file"] = (url, pathlib.Path(dest).name, timeout_seconds, expected_sha256)
-
-    def run(command, check, timeout):
-        calls["run"] = (command, check, timeout)
-
-    monkeypatch.setattr(winget_submit, "load_release_assets", load_release_assets)
-    monkeypatch.setattr(winget_submit, "resolve_windows_assets", resolve_windows_assets)
-    monkeypatch.setattr(winget_submit, "package_exists", package_exists)
-    monkeypatch.setattr(
-        winget_submit,
-        "load_wingetcreate_asset",
-        lambda github_token: winget_submit.DownloadAsset("https://example.test/wingetcreate.exe", "a" * 64),
-    )
-    monkeypatch.setattr(winget_submit, "download_file", download_file)
-    monkeypatch.setattr(winget_submit.subprocess, "run", run)
-
-    rc = winget_submit.run_submit(_args(bootstrap="true"))
-
-    assert rc == 0
-    assert calls["package_exists"] == ("OpenCLICollective.codereview-cli", "github-token")
-    assert calls["load_release_assets"] == ("open-cli-collective/codereview-cli", "v1.2.3", "github-token")
-    assert calls["download_file"] == (
-        "https://example.test/wingetcreate.exe",
-        "wingetcreate.exe",
-        winget_submit.WINGETCREATE_DOWNLOAD_TIMEOUT_SECONDS,
-        "a" * 64,
-    )
-    command, check, timeout = calls["run"]
-    assert check is True
-    assert timeout == winget_submit.WINGETCREATE_COMMAND_TIMEOUT_SECONDS
-    assert command[1:5] == ["update", "OpenCLICollective.codereview-cli", "--version", "1.2.3"]
-    assert command[5:8] == ["--urls", assets.x64.url, assets.arm64.url]
-    assert command[-2:] == ["--token", "winget-token"]
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}))
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda *a, **kw: assets)
+    monkeypatch.setattr(winget_submit, "package_exists", lambda *a: True)
+    monkeypatch.setattr(winget_submit, "render_update_manifests", lambda directory, package_id, version, assets, token: [directory / "a.yaml"])
+    monkeypatch.setattr(winget_submit, "validate_manifests", lambda *a: None)
+    monkeypatch.setattr(winget_submit, "submit_manifest_pr", lambda package_id, version, files, token, **kw: calls.setdefault("submit", (package_id, version, files, token, kw)))
+    assert winget_submit.run_submit(_args(bootstrap="true")) == 0
+    assert calls["submit"][3:] == ("winget-token", {"new_package": False})
 
 
-def test_run_submit_missing_package_with_bootstrap_submits_rendered_directory(monkeypatch):
-    assets = _assets()
-    calls = {}
-
-    monkeypatch.setattr(
-        winget_submit,
-        "load_release_assets",
-        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
-    )
-    monkeypatch.setattr(
-        winget_submit,
-        "resolve_windows_assets",
-        lambda checksums, release_assets, **_markers: assets,
-    )
-    monkeypatch.setattr(winget_submit, "package_exists", lambda package_id, github_token: False)
-    monkeypatch.setattr(
-        winget_submit,
-        "download_file",
-        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", pathlib.Path(dest).name),
-    )
-    monkeypatch.setattr(
-        winget_submit,
-        "load_wingetcreate_asset",
-        lambda github_token: winget_submit.DownloadAsset("https://example.test/wingetcreate.exe", "a" * 64),
-    )
-
-    def render_bootstrap_manifests(package_id, version, working_dir, output_dir, assets):
-        calls["render"] = (package_id, version, pathlib.Path(working_dir), pathlib.Path(output_dir).exists())
-        return [pathlib.Path(output_dir) / f"{package_id}.yaml"]
-
-    def run(command, check, timeout):
-        calls["run"] = (command, check, timeout, pathlib.Path(command[-1]).exists())
-
-    monkeypatch.setattr(winget_submit, "render_bootstrap_manifests", render_bootstrap_manifests)
-    monkeypatch.setattr(winget_submit.subprocess, "run", run)
-
-    rc = winget_submit.run_submit(_args(bootstrap="true"))
-
-    assert rc == 0
-    assert calls["render"] == (
-        "OpenCLICollective.codereview-cli",
-        "1.2.3",
-        pathlib.Path("."),
-        True,
-    )
-    command, check, timeout, rendered_dir_exists_during_submit = calls["run"]
-    assert check is True
-    assert timeout == winget_submit.WINGETCREATE_COMMAND_TIMEOUT_SECONDS
-    assert rendered_dir_exists_during_submit is True
-    assert command[1] == "submit"
-    assert command[2:5] == ["--prtitle", "New package: OpenCLICollective.codereview-cli version 1.2.3", "--token"]
-    assert command[5] == "winget-token"
-    assert command[6] == "--no-open"
+def test_run_submit_bootstrap_uses_new_github_path(monkeypatch):
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}))
+    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda *a, **kw: _assets())
+    monkeypatch.setattr(winget_submit, "package_exists", lambda *a: False)
+    monkeypatch.setattr(winget_submit, "render_bootstrap_manifests", lambda **kw: [])
+    monkeypatch.setattr(winget_submit, "upgrade_generated_manifests", lambda *a: [pathlib.Path("one.yaml")])
+    calls = []
+    monkeypatch.setattr(winget_submit, "validate_manifests", lambda *a: None)
+    monkeypatch.setattr(winget_submit, "submit_manifest_pr", lambda *a, **kw: calls.append((a, kw)))
+    assert winget_submit.run_submit(_args(bootstrap="true")) == 0
+    assert calls[0][1] == {"new_package": True}
+    assert calls[0][0][3] == "winget-token"
 
 
-def test_run_submit_missing_package_without_bootstrap_fails_before_download(monkeypatch):
-    calls = {}
+def test_upgrade_generated_manifests_updates_schema_and_checks_types(tmp_path):
+    package_id = "OpenCLICollective.example"
+    for suffix, kind in [("", "version"), (".installer", "installer"), (".locale.en-US", "defaultLocale")]:
+        _write_manifest(tmp_path / f"{package_id}{suffix}.yaml", {"PackageIdentifier": package_id, "PackageVersion": "1.2.3", "ManifestType": kind, "ManifestVersion": "1.12.0"})
+    paths = winget_submit.upgrade_generated_manifests(tmp_path, package_id, "1.2.3")
+    assert len(paths) == 3
+    for path in paths:
+        content = path.read_text()
+        assert "1.28.0.schema.json" in content
+        assert yaml.safe_load(content)["ManifestVersion"] == "1.28.0"
 
-    monkeypatch.setattr(
-        winget_submit,
-        "load_release_assets",
-        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
-    )
-    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: _assets())
-    monkeypatch.setattr(winget_submit, "package_exists", lambda package_id, github_token: False)
-    monkeypatch.setattr(
-        winget_submit,
-        "download_file",
-        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", True),
-    )
-    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check, timeout: calls.setdefault("run", True))
 
+def test_submit_manifest_pr_builds_tree_on_upstream_head(monkeypatch, tmp_path):
+    manifest = tmp_path / "OpenCLICollective.example.yaml"
+    manifest.write_text("content")
+    calls = []
+    def api(url, token, method="GET", payload=None):
+        calls.append((url, token, method, payload))
+        if url.endswith("/user"): return {"login": "alice"}
+        if url.endswith("/repos/alice/winget-pkgs"): return {"parent": {"full_name": "microsoft/winget-pkgs"}}
+        if url.endswith("/repos/microsoft/winget-pkgs"): return {"default_branch": "master"}
+        if "/git/ref/heads/" in url: return {"object": {"sha": "base"}}
+        if url.endswith("/git/commits/base"): return {"tree": {"sha": "base-tree"}}
+        if url.endswith("/git/trees"): return {"sha": "new-tree"}
+        if url.endswith("/git/commits"): return {"sha": "new-commit"}
+        if url.endswith("/git/refs"): return {}
+        if url.endswith("/pulls"): return {"html_url": "https://github.com/microsoft/winget-pkgs/pull/1"}
+        raise AssertionError(url)
+    monkeypatch.setattr(winget_submit, "github_api", api)
+    result = winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [manifest], "token", new_package=True)
+    assert result.endswith("/1")
+    tree = next(c[3] for c in calls if c[0].endswith("/git/trees"))
+    assert tree["base_tree"] == "base-tree"
+    assert tree["tree"][0]["path"] == "manifests/o/OpenCLICollective/example/1.2.3/OpenCLICollective.example.yaml"
+    commit = next(c[3] for c in calls if c[0].endswith("/git/commits"))
+    assert commit["parents"] == ["base"]
+    pr = next(c[3] for c in calls if c[0].endswith("/pulls"))
+    assert pr["base"] == "master" and pr["head"].startswith("alice:")
+
+
+def test_missing_package_without_bootstrap_fails_before_release_lookup(monkeypatch):
+    monkeypatch.setattr(winget_submit, "package_exists", lambda *a: False)
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: pytest.fail("unexpected release lookup"))
     with pytest.raises(winget_submit.SubmitError, match="bootstrap is not true"):
         winget_submit.run_submit(_args(bootstrap="false"))
 
-    assert "download_file" not in calls
-    assert "run" not in calls
 
-
-def test_run_submit_unverifiable_package_lookup_fails_closed(monkeypatch):
-    calls = {}
-
-    monkeypatch.setattr(
-        winget_submit,
-        "load_release_assets",
-        lambda repo, final_tag, github_token: ("checksums", {"asset": "url"}),
-    )
-    monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda checksums, release_assets: _assets())
-
-    def package_exists(package_id, github_token):
-        raise winget_submit.SubmitError("could not verify whether package exists")
-
-    monkeypatch.setattr(winget_submit, "package_exists", package_exists)
-    monkeypatch.setattr(
-        winget_submit,
-        "download_file",
-        lambda url, dest, timeout_seconds, expected_sha256: calls.setdefault("download_file", True),
-    )
-    monkeypatch.setattr(winget_submit.subprocess, "run", lambda command, check, timeout: calls.setdefault("run", True))
-
+def test_unverifiable_package_lookup_fails_closed(monkeypatch):
+    def fail(*args):
+        raise winget_submit.SubmitError("could not verify")
+    monkeypatch.setattr(winget_submit, "package_exists", fail)
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: pytest.fail("unexpected release lookup"))
     with pytest.raises(winget_submit.SubmitError, match="could not verify"):
         winget_submit.run_submit(_args(bootstrap="true"))
-
-    assert "download_file" not in calls
-    assert "run" not in calls
 
 
 def _write_manifest(path, data):
@@ -669,3 +535,93 @@ def _args(bootstrap):
         github_token="github-token",
         winget_token="winget-token",
     )
+
+
+
+def test_render_update_preserves_new_fields_and_updates_assets(monkeypatch, tmp_path):
+    import base64, json
+    package = "OpenCLICollective.codereview-cli"
+    records = {
+        f"{package}.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "version", "ManifestVersion": "1.28.0", "UnknownNewField": {"keep": "me"}},
+        f"{package}.locale.en-US.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "defaultLocale", "ManifestVersion": "1.28.0"},
+        f"{package}.installer.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "installer", "ManifestVersion": "1.28.0", "Installers": [{"Architecture": "x64", "InstallerUrl": "old", "InstallerSha256": "old", "UnknownField": "keep"}, {"Architecture": "arm64", "InstallerUrl": "old", "InstallerSha256": "old"}]},
+    }
+    listing = [{"name": name, "url": f"https://test/{name}"} for name in records]
+    def fetch(url, token):
+        if url.endswith("/1.0.0"): return listing
+        if url.startswith("https://test/"):
+            name = url.rsplit("/", 1)[-1]
+            return {"content": base64.b64encode(json.dumps(records[name]).encode()).decode()}
+        return [{"name": "1.0.0", "type": "dir"}]
+    monkeypatch.setattr(winget_submit, "github_request_json", fetch)
+    output = winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
+    assert len(output) == 3
+    version = yaml.safe_load((tmp_path / f"{package}.yaml").read_text())
+    assert version["UnknownNewField"] == {"keep": "me"}
+    assert version["PackageVersion"] == "1.2.3"
+    installer = yaml.safe_load((tmp_path / f"{package}.installer.yaml").read_text())
+    assert installer["Installers"][0]["UnknownField"] == "keep"
+    assert installer["Installers"][0]["InstallerUrl"] == _assets().x64.url
+    assert installer["Installers"][1]["InstallerSha256"] == _assets().arm64.sha256
+
+
+def test_submit_manifest_pr_refuses_non_fork_before_writing(monkeypatch):
+    calls = []
+    def api(url, token, method="GET", payload=None):
+        calls.append(method)
+        if url.endswith("/user"):
+            return {"login": "alice"}
+        return {"parent": {"full_name": "other/repo"}}
+    monkeypatch.setattr(winget_submit, "github_api", api)
+    with pytest.raises(winget_submit.SubmitError, match="not a fork"):
+        winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [], "token", new_package=True)
+    assert calls == ["GET", "GET"]
+
+
+def test_schema_validation_rejects_invalid_manifest(monkeypatch, tmp_path):
+    import io, json
+    path = tmp_path / "invalid.yaml"
+    _write_manifest(path, {"ManifestType": "version", "PackageIdentifier": "wrong"})
+    class Response(io.BytesIO):
+        pass
+    monkeypatch.setattr(winget_submit, "urlopen", lambda *args, **kwargs: Response(json.dumps({"type": "object", "required": ["PackageVersion"]}).encode()))
+    with pytest.raises(winget_submit.SubmitError, match="schema validation failed"):
+        winget_submit.validate_manifests([path])
+
+
+def test_render_update_rejects_unsupported_installer_layout(monkeypatch, tmp_path):
+    import base64, json
+    package = "OpenCLICollective.codereview-cli"
+    installer = {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "installer", "ManifestVersion": "1.12.0", "Installers": [{"Architecture": "x64"}]}
+    def fetch(url, token):
+        if url.endswith("/1.0.0"):
+            return [{"name": package + ".installer.yaml", "url": "https://test/installer"}]
+        if url == "https://test/installer":
+            return {"content": base64.b64encode(json.dumps(installer).encode()).decode()}
+        return [{"name": "1.0.0", "type": "dir"}]
+    monkeypatch.setattr(winget_submit, "github_request_json", fetch)
+    with pytest.raises(winget_submit.SubmitError, match="exactly one x64 and one arm64"):
+        winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
+
+
+def test_submit_manifest_pr_uses_explicit_upstream_only_for_test(monkeypatch, tmp_path):
+    path = tmp_path / "OpenCLICollective.example.yaml"
+    path.write_text("content")
+    calls = []
+    def api(url, token, method="GET", payload=None):
+        calls.append((url, method, payload))
+        if url.endswith("/user"): return {"login": "alice"}
+        if url.endswith("/repos/alice/winget-pkgs"):
+            if len([x for x in calls if x[0].endswith("/repos/alice/winget-pkgs")]) == 1:
+                return {"parent": {"full_name": "microsoft/winget-pkgs"}}
+            return {"default_branch": "master"}
+        if "/git/ref/heads/" in url: return {"object": {"sha": "base"}}
+        if url.endswith("/git/commits/base"): return {"tree": {"sha": "base-tree"}}
+        if url.endswith("/git/trees"): return {"sha": "tree"}
+        if url.endswith("/git/commits"): return {"sha": "commit"}
+        if url.endswith("/git/refs"): return {}
+        if url.endswith("/pulls"): return {"html_url": "https://github.com/alice/winget-pkgs/pull/1"}
+        raise AssertionError(url)
+    monkeypatch.setattr(winget_submit, "github_api", api)
+    winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [path], "token", new_package=True, upstream_repo="alice/winget-pkgs")
+    assert any(url == "https://api.github.com/repos/alice/winget-pkgs/pulls" and method == "POST" for url, method, payload in calls)
