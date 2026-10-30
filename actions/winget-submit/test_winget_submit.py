@@ -602,3 +602,26 @@ def test_render_update_rejects_unsupported_installer_layout(monkeypatch, tmp_pat
     monkeypatch.setattr(winget_submit, "github_request_json", fetch)
     with pytest.raises(winget_submit.SubmitError, match="exactly one x64 and one arm64"):
         winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
+
+
+def test_submit_manifest_pr_uses_explicit_upstream_only_for_test(monkeypatch, tmp_path):
+    path = tmp_path / "OpenCLICollective.example.yaml"
+    path.write_text("content")
+    calls = []
+    def api(url, token, method="GET", payload=None):
+        calls.append((url, method, payload))
+        if url.endswith("/user"): return {"login": "alice"}
+        if url.endswith("/repos/alice/winget-pkgs"):
+            if len([x for x in calls if x[0].endswith("/repos/alice/winget-pkgs")]) == 1:
+                return {"parent": {"full_name": "microsoft/winget-pkgs"}}
+            return {"default_branch": "master"}
+        if "/git/ref/heads/" in url: return {"object": {"sha": "base"}}
+        if url.endswith("/git/commits/base"): return {"tree": {"sha": "base-tree"}}
+        if url.endswith("/git/trees"): return {"sha": "tree"}
+        if url.endswith("/git/commits"): return {"sha": "commit"}
+        if url.endswith("/git/refs"): return {}
+        if url.endswith("/pulls"): return {"html_url": "https://github.com/alice/winget-pkgs/pull/1"}
+        raise AssertionError(url)
+    monkeypatch.setattr(winget_submit, "github_api", api)
+    winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [path], "token", new_package=True, upstream_repo="alice/winget-pkgs")
+    assert any(url == "https://api.github.com/repos/alice/winget-pkgs/pulls" and method == "POST" for url, method, payload in calls)

@@ -313,7 +313,7 @@ def github_api(url: str, token: str, method: str = "GET", payload=None):
         raise GitHubAPIError(None, str(exc)) from exc
 
 
-def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: str, *, new_package: bool):
+def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: str, *, new_package: bool, upstream_repo: str = "microsoft/winget-pkgs", expected_fork_parent: str = "microsoft/winget-pkgs"):
     """Create an upstream PR from a fresh tree based on the current upstream commit."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", package_id) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+-]*", version):
         raise SubmitError("invalid package ID or version")
@@ -325,7 +325,7 @@ def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: 
     except GitHubAPIError as exc:
         if exc.status != 404:
             raise
-        github_api(f"{api}/repos/microsoft/winget-pkgs/forks", token, "POST", {"default_branch_only": True})
+        github_api(f"{api}/repos/{upstream_repo}/forks", token, "POST", {"default_branch_only": True})
         fork = None
         for _ in range(20):
             time.sleep(3)
@@ -337,12 +337,12 @@ def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: 
                     raise
         if fork is None:
             raise SubmitError("winget-pkgs fork was not ready after 60 seconds")
-    if (fork.get("parent") or {}).get("full_name", "").lower() != "microsoft/winget-pkgs":
-        raise SubmitError(f"{user}/winget-pkgs is not a fork of microsoft/winget-pkgs")
-    upstream = github_api(f"{api}/repos/microsoft/winget-pkgs", token)
+    if (fork.get("parent") or {}).get("full_name", "").lower() != expected_fork_parent.lower():
+        raise SubmitError(f"{user}/winget-pkgs is not a fork of {expected_fork_parent}")
+    upstream = github_api(f"{api}/repos/{upstream_repo}", token)
     base = upstream["default_branch"]
-    head = github_api(f"{api}/repos/microsoft/winget-pkgs/git/ref/heads/{quote(base, safe='')}", token)["object"]["sha"]
-    commit = github_api(f"{api}/repos/microsoft/winget-pkgs/git/commits/{head}", token)
+    head = github_api(f"{api}/repos/{upstream_repo}/git/ref/heads/{quote(base, safe='')}", token)["object"]["sha"]
+    commit = github_api(f"{api}/repos/{upstream_repo}/git/commits/{head}", token)
     manifest_path = f"{package_id_to_winget_path(package_id)}/{version}"
     tree = [{"path": f"{manifest_path}/{f.name}", "mode": "100644", "type": "blob", "content": f.read_text(encoding="utf-8")} for f in files]
     tree_sha = github_api(f"{fork_url}/git/trees", token, "POST", {"base_tree": commit["tree"]["sha"], "tree": tree})["sha"]
@@ -351,7 +351,7 @@ def submit_manifest_pr(package_id: str, version: str, files: list[Path], token: 
     branch = f"open-cli-collective-{uuid.uuid4().hex}"
     github_api(f"{fork_url}/git/refs", token, "POST", {"ref": f"refs/heads/{branch}", "sha": commit_sha})
     title = f"New package: {message}" if new_package else message
-    pr = github_api(f"{api}/repos/microsoft/winget-pkgs/pulls", token, "POST", {"title": title, "head": f"{user}:{branch}", "base": base, "body": f"Automated WinGet manifest submission for {message}."})
+    pr = github_api(f"{api}/repos/{upstream_repo}/pulls", token, "POST", {"title": title, "head": f"{user}:{branch}", "base": base, "body": f"Automated WinGet manifest submission for {message}."})
     _write_summary(f"WinGet pull request: {pr['html_url']}")
     return pr["html_url"]
 
