@@ -383,10 +383,10 @@ def test_render_bootstrap_manifests_rejects_output_inside_source(tmp_path):
 def test_run_submit_existing_package_copies_upstream_manifests(monkeypatch):
     assets = _assets()
     calls = {}
-    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}))
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}, {}))
     monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda *a, **kw: assets)
     monkeypatch.setattr(winget_submit, "package_exists", lambda *a: True)
-    monkeypatch.setattr(winget_submit, "render_update_manifests", lambda directory, package_id, version, assets, token: [directory / "a.yaml"])
+    monkeypatch.setattr(winget_submit, "render_update_manifests", lambda directory, package_id, version, assets, token, release: [directory / "a.yaml"])
     monkeypatch.setattr(winget_submit, "validate_manifests", lambda *a: None)
     monkeypatch.setattr(winget_submit, "submit_manifest_pr", lambda package_id, version, files, token, **kw: calls.setdefault("submit", (package_id, version, files, token, kw)))
     assert winget_submit.run_submit(_args(bootstrap="true")) == 0
@@ -394,7 +394,7 @@ def test_run_submit_existing_package_copies_upstream_manifests(monkeypatch):
 
 
 def test_run_submit_bootstrap_uses_new_github_path(monkeypatch):
-    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}))
+    monkeypatch.setattr(winget_submit, "load_release_assets", lambda *a: ("checksums", {}, {}))
     monkeypatch.setattr(winget_submit, "resolve_windows_assets", lambda *a, **kw: _assets())
     monkeypatch.setattr(winget_submit, "package_exists", lambda *a: False)
     monkeypatch.setattr(winget_submit, "render_bootstrap_manifests", lambda **kw: [])
@@ -554,7 +554,7 @@ def test_render_update_preserves_new_fields_and_updates_assets(monkeypatch, tmp_
             return {"content": base64.b64encode(json.dumps(records[name]).encode()).decode()}
         return [{"name": "1.0.0", "type": "dir"}]
     monkeypatch.setattr(winget_submit, "github_request_json", fetch)
-    output = winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
+    output = winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token", {})
     assert len(output) == 3
     version = yaml.safe_load((tmp_path / f"{package}.yaml").read_text())
     assert version["UnknownNewField"] == {"keep": "me"}
@@ -563,6 +563,8 @@ def test_render_update_preserves_new_fields_and_updates_assets(monkeypatch, tmp_
     assert installer["Installers"][0]["UnknownField"] == "keep"
     assert installer["Installers"][0]["InstallerUrl"] == _assets().x64.url
     assert installer["Installers"][1]["InstallerSha256"] == _assets().arm64.sha256
+    locale = yaml.safe_load((tmp_path / f"{package}.locale.en-US.yaml").read_text())
+    assert "ReleaseNotesUrl" not in locale and "ReleaseDate" not in installer
 
 
 def test_submit_manifest_pr_refuses_non_fork_before_writing(monkeypatch):
@@ -601,7 +603,7 @@ def test_render_update_rejects_unsupported_installer_layout(monkeypatch, tmp_pat
         return [{"name": "1.0.0", "type": "dir"}]
     monkeypatch.setattr(winget_submit, "github_request_json", fetch)
     with pytest.raises(winget_submit.SubmitError, match="exactly one x64 and one arm64"):
-        winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
+        winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token", {})
 
 
 def test_submit_manifest_pr_uses_explicit_upstream_only_for_test(monkeypatch, tmp_path):
@@ -625,3 +627,38 @@ def test_submit_manifest_pr_uses_explicit_upstream_only_for_test(monkeypatch, tm
     monkeypatch.setattr(winget_submit, "github_api", api)
     winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [path], "token", new_package=True, upstream_repo="alice/winget-pkgs")
     assert any(url == "https://api.github.com/repos/alice/winget-pkgs/pulls" and method == "POST" for url, method, payload in calls)
+
+
+@pytest.mark.parametrize("release", [{}, {"html_url": "http://example.test", "published_at": "bad"}])
+def test_missing_release_metadata_fails_closed(release):
+    with pytest.raises(winget_submit.SubmitError):
+        winget_submit._release_notes_url(release)
+    with pytest.raises(winget_submit.SubmitError):
+        winget_submit._release_date(release)
+
+
+def test_render_update_uses_actual_release_metadata(monkeypatch, tmp_path):
+    import base64, json
+    package = "OpenCLICollective.newrelic-cli"
+    records = {
+        f"{package}.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "version", "ManifestVersion": "1.28.0"},
+        f"{package}.locale.en-US.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "defaultLocale", "ManifestVersion": "1.28.0", "ReleaseNotes": "stale notes", "ReleaseNotesUrl": "https://github.com/old/release"},
+        f"{package}.installer.yaml": {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "installer", "ManifestVersion": "1.28.0", "ReleaseDate": "2020-01-01", "Installers": [{"Architecture": "x64", "ReleaseDate": "2020-01-01"}, {"Architecture": "arm64"}]},
+    }
+    def fetch(url, token):
+        if url.endswith("/1.0.0"):
+            return [{"name": name, "url": f"https://test/{name}"} for name in records]
+        if url.startswith("https://test/"):
+            return {"content": base64.b64encode(json.dumps(records[url.rsplit("/", 1)[-1]]).encode()).decode()}
+        return [{"name": "1.0.0", "type": "dir"}]
+    monkeypatch.setattr(winget_submit, "github_request_json", fetch)
+    release = {"html_url": "https://github.com/open-cli-collective/newrelic-cli/releases/tag/v1.2.3", "published_at": "2026-10-28T14:18:11Z"}
+    winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token", release)
+    locale = yaml.safe_load((tmp_path / f"{package}.locale.en-US.yaml").read_text())
+    installer = yaml.safe_load((tmp_path / f"{package}.installer.yaml").read_text())
+    assert locale["ReleaseNotesUrl"] == release["html_url"]
+    assert "ReleaseNotes" not in locale
+    assert installer["ReleaseDate"] == "2026-10-28"
+    assert installer["Installers"][0]["ReleaseDate"] == "2026-10-28"
+    assert "ReleaseDate" not in installer["Installers"][1]
+    assert winget_submit._release_date({"published_at": "2026-10-28T23:30:00-05:00"}) == "2026-10-29"

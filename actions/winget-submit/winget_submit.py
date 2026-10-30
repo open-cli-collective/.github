@@ -87,7 +87,7 @@ def package_exists(package_id: str, github_token: str, request_json=None) -> boo
     return True
 
 
-def load_release_assets(repo: str, final_tag: str, github_token: str) -> tuple[str, dict[str, str]]:
+def load_release_assets(repo: str, final_tag: str, github_token: str) -> tuple[str, dict[str, str], dict]:
     if repo.count("/") != 1:
         raise SubmitError(f"repo must be owner/name, got {repo!r}")
     release_url = f"https://api.github.com/repos/{repo}/releases/tags/{quote(final_tag, safe='')}"
@@ -106,7 +106,7 @@ def load_release_assets(repo: str, final_tag: str, github_token: str) -> tuple[s
         for name, asset in by_name.items()
         if asset.get("browser_download_url")
     }
-    return checksums_text, download_urls
+    return checksums_text, download_urls, release
 
 
 def resolve_windows_assets(
@@ -214,7 +214,7 @@ def upgrade_generated_manifests(directory: Path, package_id: str, version: str) 
     return paths
 
 
-def render_update_manifests(directory: Path, package_id: str, version: str, assets: WindowsAssets, token: str) -> list[Path]:
+def render_update_manifests(directory: Path, package_id: str, version: str, assets: WindowsAssets, token: str, release: dict) -> list[Path]:
     """Copy latest published manifests and update only the release-specific fields."""
     package_path = package_id_to_winget_path(package_id)
     base_url = f"https://api.github.com/repos/microsoft/winget-pkgs/contents/{quote(package_path, safe='/')}"
@@ -261,16 +261,19 @@ def render_update_manifests(directory: Path, package_id: str, version: str, asse
         data["PackageVersion"] = version
         if kind in {"defaultLocale", "locale"}:
             data.pop("ReleaseNotes", None)
-            data.pop("ReleaseNotesUrl", None)
+            if "ReleaseNotesUrl" in data:
+                data["ReleaseNotesUrl"] = _release_notes_url(release)
         if kind == "installer":
-            data.pop("ReleaseDate", None)
+            if "ReleaseDate" in data:
+                data["ReleaseDate"] = _release_date(release)
             if "InstallerUrl" in data or "InstallerSha256" in data:
                 raise SubmitError("root-level installer URL or hash requires manual update")
             installers = data.get("Installers")
             if not isinstance(installers, list) or len(installers) != 2 or sorted(i.get("Architecture", "") for i in installers if isinstance(i, dict)) != ["arm64", "x64"]:
                 raise SubmitError("expected exactly one x64 and one arm64 installer; refusing automatic update")
             for installer in installers:
-                installer.pop("ReleaseDate", None)
+                if "ReleaseDate" in installer:
+                    installer["ReleaseDate"] = _release_date(release)
             _update_installer_manifest(data, assets)
         data["ManifestVersion"] = TARGET_MANIFEST_VERSION
         dest = directory / name
@@ -279,6 +282,26 @@ def render_update_manifests(directory: Path, package_id: str, version: str, asse
     if not {"version", "installer", "defaultLocale"}.issubset(types):
         raise SubmitError("existing package does not have a complete set of multifile manifests")
     return output
+
+
+def _release_notes_url(release: dict) -> str:
+    url = release.get("html_url")
+    if not isinstance(url, str) or not url.startswith("https://github.com/"):
+        raise SubmitError("GitHub release has no valid public release URL")
+    return url
+
+
+def _release_date(release: dict) -> str:
+    published_at = release.get("published_at")
+    try:
+        if not isinstance(published_at, str):
+            raise ValueError("missing timestamp")
+        published = datetime.datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            raise ValueError("timestamp has no timezone")
+        return published.astimezone(datetime.timezone.utc).date().isoformat()
+    except ValueError as exc:
+        raise SubmitError("GitHub release has no valid publication timestamp") from exc
 
 
 def validate_manifests(files: list[Path]) -> None:
@@ -396,7 +419,7 @@ def run_submit(args) -> int:
             "packages.winget.bootstrap is not true"
         )
 
-    checksums_text, release_assets = load_release_assets(args.repo, args.final_tag, args.github_token)
+    checksums_text, release_assets, release = load_release_assets(args.repo, args.final_tag, args.github_token)
     assets = resolve_windows_assets(
         checksums_text,
         release_assets,
@@ -407,7 +430,7 @@ def run_submit(args) -> int:
         root = Path(tmp)
         rendered_dir = root / "rendered"
         if mode == MODE_UPDATE:
-            files = render_update_manifests(rendered_dir, args.package_id, args.version, assets, args.github_token)
+            files = render_update_manifests(rendered_dir, args.package_id, args.version, assets, args.github_token, release)
         else:
             files = render_bootstrap_manifests(package_id=args.package_id, version=args.version, working_dir=args.working_dir, output_dir=rendered_dir, assets=assets)
             files = upgrade_generated_manifests(rendered_dir, args.package_id, args.version)
