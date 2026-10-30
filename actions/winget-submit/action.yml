@@ -33,26 +33,16 @@ inputs:
     description: "GitHub token for release asset download and winget-pkgs existence lookup"
     required: true
   winget-token:
-    description: "GitHub token used by wingetcreate to submit to microsoft/winget-pkgs"
+    description: "GitHub token used to create a fork and submit pull requests to microsoft/winget-pkgs"
     required: true
 runs:
   using: composite
   steps:
-    - name: Assert Windows runner
-      shell: bash
-      env:
-        RUNNER_OS_NAME: ${{ runner.os }}
-      run: |
-        set -euo pipefail
-        if [ "$RUNNER_OS_NAME" != "Windows" ]; then
-          echo "::error::winget-submit requires a Windows runner because wingetcreate.exe is Windows-only"
-          exit 1
-        fi
     - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: "3.12"
     - shell: bash
-      run: pip install "PyYAML==6.0.2"
+      run: pip install "PyYAML==6.0.2" "packaging==25.0" "jsonschema==4.25.1"
     - shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
