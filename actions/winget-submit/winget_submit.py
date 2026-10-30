@@ -202,6 +202,11 @@ def upgrade_generated_manifests(directory: Path, package_id: str, version: str) 
         if str(data["PackageVersion"]) != version:
             raise SubmitError(f"{path}: unexpected package version")
         types.add(data.get("ManifestType"))
+        try:
+            if Version(str(data.get("ManifestVersion", ""))) > Version(TARGET_MANIFEST_VERSION):
+                raise SubmitError(f"{path}: refusing to downgrade newer manifest schema")
+        except InvalidVersion as exc:
+            raise SubmitError(f"{path}: invalid manifest schema version") from exc
         data["ManifestVersion"] = TARGET_MANIFEST_VERSION
         path.write_text(_dump_manifest(data, path), encoding="utf-8")
     if not {"version", "installer", "defaultLocale"}.issubset(types):

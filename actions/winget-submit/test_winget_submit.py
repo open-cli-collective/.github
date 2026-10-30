@@ -563,3 +563,42 @@ def test_render_update_preserves_new_fields_and_updates_assets(monkeypatch, tmp_
     assert installer["Installers"][0]["UnknownField"] == "keep"
     assert installer["Installers"][0]["InstallerUrl"] == _assets().x64.url
     assert installer["Installers"][1]["InstallerSha256"] == _assets().arm64.sha256
+
+
+def test_submit_manifest_pr_refuses_non_fork_before_writing(monkeypatch):
+    calls = []
+    def api(url, token, method="GET", payload=None):
+        calls.append(method)
+        if url.endswith("/user"):
+            return {"login": "alice"}
+        return {"parent": {"full_name": "other/repo"}}
+    monkeypatch.setattr(winget_submit, "github_api", api)
+    with pytest.raises(winget_submit.SubmitError, match="not a fork"):
+        winget_submit.submit_manifest_pr("OpenCLICollective.example", "1.2.3", [], "token", new_package=True)
+    assert calls == ["GET", "GET"]
+
+
+def test_schema_validation_rejects_invalid_manifest(monkeypatch, tmp_path):
+    import io, json
+    path = tmp_path / "invalid.yaml"
+    _write_manifest(path, {"ManifestType": "version", "PackageIdentifier": "wrong"})
+    class Response(io.BytesIO):
+        pass
+    monkeypatch.setattr(winget_submit, "urlopen", lambda *args, **kwargs: Response(json.dumps({"type": "object", "required": ["PackageVersion"]}).encode()))
+    with pytest.raises(winget_submit.SubmitError, match="schema validation failed"):
+        winget_submit.validate_manifests([path])
+
+
+def test_render_update_rejects_unsupported_installer_layout(monkeypatch, tmp_path):
+    import base64, json
+    package = "OpenCLICollective.codereview-cli"
+    installer = {"PackageIdentifier": package, "PackageVersion": "1.0.0", "ManifestType": "installer", "ManifestVersion": "1.12.0", "Installers": [{"Architecture": "x64"}]}
+    def fetch(url, token):
+        if url.endswith("/1.0.0"):
+            return [{"name": package + ".installer.yaml", "url": "https://test/installer"}]
+        if url == "https://test/installer":
+            return {"content": base64.b64encode(json.dumps(installer).encode()).decode()}
+        return [{"name": "1.0.0", "type": "dir"}]
+    monkeypatch.setattr(winget_submit, "github_request_json", fetch)
+    with pytest.raises(winget_submit.SubmitError, match="exactly one x64 and one arm64"):
+        winget_submit.render_update_manifests(tmp_path, package, "1.2.3", _assets(), "token")
